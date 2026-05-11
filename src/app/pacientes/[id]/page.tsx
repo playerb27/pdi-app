@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2 } from 'lucide-react';
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
+import EvolutionCharts from '@/components/EvolutionCharts';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -527,6 +528,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               </div>
             </section>
           ))}
+
+          {/* ── Evolución Clínica en el Tiempo ── */}
+          {studies.length > 0 && <EvolutionCharts studies={studies} />}
         </div>
 
         {/* ── RIGHT: Árbol Sistémico — scrollable independently ── */}
