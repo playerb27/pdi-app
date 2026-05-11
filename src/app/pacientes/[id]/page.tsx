@@ -5,6 +5,7 @@ import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRig
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
+import { studyBiomarkerElementId, chartBiomarkerElementId, normalizeBiomarkerName } from '@/lib/biomarkers';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -230,36 +231,55 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
 
   // ─── Smart Biomarker Search ──────────────────────────────────────────────────
-  const scrollToMarker = (elementId: string) => {
-    const el = document.getElementById(elementId);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    setGlowId(elementId);
-    setTimeout(() => setGlowId(null), 2500);
+  const scrollToMarker = (elementId: string, studyId?: string) => {
+    const doScroll = () => {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setGlowId(elementId);
+      setTimeout(() => setGlowId(null), 2500);
+    };
     setIsSearchOpen(false);
     setSearchQuery('');
+    // If the result belongs to a specific study, activate it first, then scroll after render
+    if (studyId && studyId !== activeStudyId) {
+      const targetStudy = studies.find(s => s.id === studyId);
+      if (targetStudy) {
+        setActiveStudyId(studyId);
+        setAnalysisResult({ biomarkers: (targetStudy.biomarkers ?? []) as Biomarker[], summary: targetStudy.summary });
+      }
+      setTimeout(doScroll, 200); // wait for re-render
+    } else {
+      setTimeout(doScroll, 50);
+    }
   };
 
   const searchResults = (() => {
     if (!searchQuery.trim() || searchQuery.length < 2) return [];
     const q = searchQuery.toLowerCase();
-    const results: { id: string; label: string; sub: string; type: 'study' | 'chart' }[] = [];
+    const results: { id: string; studyId?: string; label: string; sub: string; type: 'study' | 'chart' }[] = [];
+    // Study biomarker results (one per study that has the marker)
     studies.forEach(s => {
-      const dateStr = s.exam_date
-        ? new Date(s.exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+      const rawDate = (s as any).exam_date ?? null;
+      const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+      const displayDate = (rawDate ?? fileDate)
+        ? new Date((rawDate ?? fileDate) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
         : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
       (s.biomarkers ?? []).forEach(bm => {
         if (bm.name.toLowerCase().includes(q)) {
-          results.push({ id: `bm-study-${s.id}-${bm.name.replace(/\s+/g, '-')}`, label: bm.name, sub: `📊 Estudio del ${dateStr} · ${bm.value} ${bm.unit}`, type: 'study' });
+          const elemId = studyBiomarkerElementId(s.id, bm.name);
+          results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${bm.value} ${bm.unit}`, type: 'study' });
         }
       });
     });
-    const seen = new Set<string>();
+    // Chart results — deduplicated by canonical name
+    const seenCharts = new Set<string>();
     studies.forEach(s => {
       (s.biomarkers ?? []).forEach(bm => {
-        if (bm.name.toLowerCase().includes(q) && !seen.has(bm.name)) {
-          seen.add(bm.name);
-          results.push({ id: `bm-chart-${bm.name.replace(/\s+/g, '-')}`, label: bm.name, sub: `📈 Gráfica de evolución clínica`, type: 'chart' });
+        const canonical = normalizeBiomarkerName(bm.name);
+        if (bm.name.toLowerCase().includes(q) && !seenCharts.has(canonical)) {
+          seenCharts.add(canonical);
+          results.push({ id: chartBiomarkerElementId(bm.name), label: canonical, sub: `📈 Gráfica de evolución clínica`, type: 'chart' });
         }
       });
     });
@@ -416,7 +436,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             )}
             <div style={{ overflowY: 'auto', maxHeight: 'calc(70vh - 70px)' }}>
               {searchResults.map((r, i) => (
-                <button key={i} onClick={() => scrollToMarker(r.id)}
+                <button key={i} onClick={() => scrollToMarker(r.id, r.studyId)}
                   style={{ width: '100%', textAlign: 'left', padding: '12px 20px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.15s' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(212,175,55,0.06)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -521,12 +541,15 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   )}
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                     {[...studies].sort((a, b) => {
-                      const da = new Date((a as any).exam_date ?? a.created_at).getTime();
-                      const db = new Date((b as any).exam_date ?? b.created_at).getTime();
-                      return db - da; // más recientes primero
+                      const da = new Date((a as any).exam_date ?? a.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? a.created_at).getTime();
+                      const db = new Date((b as any).exam_date ?? b.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? b.created_at).getTime();
+                      return db - da;
                     }).map((s) => {
-                      const examDate = (s as any).exam_date
-                        ? new Date((s as any).exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+                      const rawDate = (s as any).exam_date ?? null;
+                      const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+                      const bestDate = rawDate ?? fileDate;
+                      const examDate = bestDate
+                        ? new Date(bestDate + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
                         : null;
                       const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
                       const isActive = activeStudyId === s.id;
@@ -539,7 +562,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                                 <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block' }}>subido {uploadDate}</span>
                               </>
                             ) : (
-                              <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate} · {s.file_name?.split('.')[0]?.slice(0,15)}</span>
+                              <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate}</span>
                             )}
                           </button>
                           <button onClick={async () => {
