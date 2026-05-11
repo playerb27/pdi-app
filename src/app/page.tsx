@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { Plus, Search, FileText, Clock, AlertTriangle, X, Lock, Mail, User } from 'lucide-react';
+import { Plus, Search, X, Lock, Mail, Zap } from 'lucide-react';
 import { getPatients, createPatient, getPatientProgressBatch, Patient } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import { supabase } from '@/lib/supabase';
@@ -22,6 +22,32 @@ export default function Dashboard() {
   const [progress, setProgress] = useState<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOption, setSortOption] = useState('fecha_desc');
+
+  // Brief IA: { [patientId]: { loading, text } }
+  const [briefs, setBriefs] = useState<Record<string, { loading: boolean; text: string | null }>>({});
+
+  const generateBrief = async (patientId: string) => {
+    // Toggle off if already showing
+    if (briefs[patientId]?.text) {
+      setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: null } }));
+      return;
+    }
+    setBriefs(prev => ({ ...prev, [patientId]: { loading: true, text: null } }));
+    try {
+      const res = await fetch('/api/patient/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          patientId,
+          message: 'Redacta un brief clínico ejecutivo de 2 párrafos cortos sobre este paciente. Incluye: quién es (edad, género, origen si se conoce), sus condiciones o síntomas más importantes, los valores de laboratorio más alterados, y qué espera del tratamiento. Usa un tono médico profesional y conciso. Si no hay suficiente información, indica qué falta.',
+        }),
+      });
+      const data = await res.json();
+      setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: data.reply ?? data.error ?? 'Sin respuesta' } }));
+    } catch {
+      setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: 'Error al generar el resumen.' } }));
+    }
+  };
 
   // Form state
   const [formData, setFormData] = useState({
@@ -274,6 +300,20 @@ export default function Dashboard() {
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.gender === 'male' ? 'Hombre' : 'Mujer'} · {age} años · Inicio: {new Date(p.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
 
+                  {/* Brief IA button */}
+                  <button
+                    onClick={() => generateBrief(p.id)}
+                    title="Resumen clínico rápido con IA"
+                    style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '4px', padding: '10px 14px', borderRadius: '10px', border: `1px solid ${briefs[p.id]?.text ? 'rgba(212,175,55,0.6)' : 'var(--border-subtle)'}`, background: briefs[p.id]?.text ? 'rgba(212,175,55,0.08)' : 'transparent', color: briefs[p.id]?.text ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '60px', transition: 'all 0.2s' }}
+                    onMouseEnter={e => { if (!briefs[p.id]?.text) { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.06)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(212,175,55,0.4)'; }}}
+                    onMouseLeave={e => { if (!briefs[p.id]?.text) { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)'; }}}
+                  >
+                    {briefs[p.id]?.loading
+                      ? <span style={{ fontSize: '16px', animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span>
+                      : <Zap size={16} fill={briefs[p.id]?.text ? 'currentColor' : 'none'} />}
+                    <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Brief</span>
+                  </button>
+
                   {/* Entrevista mini widget */}
                   <button onClick={() => router.push(`/pacientes/${p.id}/entrevista`)} style={{ display: 'flex', flexDirection: 'column', gap: '7px', padding: '10px 16px', borderRadius: '10px', border: '1px solid rgba(212,175,55,0.35)', background: 'rgba(212,175,55,0.05)', color: 'var(--gold-primary)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '150px', textAlign: 'left' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -301,6 +341,19 @@ export default function Dashboard() {
                     Ver Expediente
                   </button>
                 </div>
+
+                {/* ── Brief IA panel (expands below the card) ── */}
+                {briefs[p.id]?.text && (
+                  <div style={{ gridColumn: '1 / -1', padding: '16px 20px', borderTop: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.03)', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                      <Zap size={16} color="var(--gold-primary)" style={{ marginTop: '3px', flexShrink: 0 }} fill="var(--gold-primary)" />
+                      <div>
+                        <p style={{ margin: '0 0 4px', fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--gold-primary)', opacity: 0.8 }}>Brief Clínico · IA</p>
+                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{briefs[p.id].text}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
               );
             })
           )}
