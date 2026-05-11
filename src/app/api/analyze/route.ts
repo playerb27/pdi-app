@@ -54,10 +54,16 @@ PASO 4 — Para cada biomarcador real extrae:
   13. "Protocolo Maestro de Intervención"
   14. "Anexos y Glosario"
 
+PASO 5 — Fecha del examen:
+Busca en el documento la FECHA en que se realizó el examen (no la fecha de entrega ni de impresión si son diferentes).
+Busca campos como: "Fecha de toma", "Fecha de muestra", "Fecha", "F. Recepción", "Date", etc.
+Devuelve la fecha en formato ISO YYYY-MM-DD. Si no encuentras fecha, devuelve null.
+
 Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown.
 
 Formato:
 {
+  "exam_date": "2024-03-15",
   "biomarkers": [
     { "name": "Glucosa", "value": "100.0", "unit": "mg/dL", "referenceRange": "74 - 106", "flag": "Normal", "system": "Sistema Metabólico y Energético" },
     { "name": "Triglicéridos", "value": "99.0", "unit": "mg/dL", "referenceRange": "< 150 Normal / 150-199 Límite / 200-499 Alto", "flag": "Normal", "system": "Salud Cardiovascular y Circulatoria" }

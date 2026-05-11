@@ -75,6 +75,7 @@ export interface Study {
   file_name: string;
   summary: string;
   created_at: string;
+  exam_date?: string;   // fecha real del examen (extraída del documento)
   biomarkers?: Biomarker[];
 }
 
@@ -89,10 +90,10 @@ export interface Biomarker {
   system: string;
 }
 
-export async function createStudy(patientId: string, fileName: string, summary: string): Promise<Study | null> {
+export async function createStudy(patientId: string, fileName: string, summary: string, examDate?: string): Promise<Study | null> {
   const { data, error } = await supabase
     .from('studies')
-    .insert([{ patient_id: patientId, file_name: fileName, summary }])
+    .insert([{ patient_id: patientId, file_name: fileName, summary, ...(examDate ? { exam_date: examDate } : {}) }])
     .select()
     .single();
   if (error) { console.error("Error creating study:", error.message); return null; }

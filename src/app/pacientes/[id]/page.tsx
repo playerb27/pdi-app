@@ -75,6 +75,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [showChatHistory, setShowChatHistory] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  // Smart search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [glowId, setGlowId] = useState<string | null>(null);
+
   // Cargar historial guardado al entrar al perfil del paciente
   useEffect(() => {
     if (!id) return;
@@ -178,7 +183,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
         update('saving');
         // Always create a separate study — user can manually merge afterwards
-        const study = await createStudy(id, file.name, aiData.summary);
+        const study = await createStudy(id, file.name, aiData.summary, aiData.exam_date ?? undefined);
         if (study) {
           await createBiomarkers(study.id, aiData.biomarkers);
           update('done');
@@ -222,6 +227,43 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     }
   };
 
+
+  // ─── Smart Biomarker Search ──────────────────────────────────────────────────
+  const scrollToMarker = (elementId: string) => {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setGlowId(elementId);
+    setTimeout(() => setGlowId(null), 2500);
+    setIsSearchOpen(false);
+    setSearchQuery('');
+  };
+
+  const searchResults = (() => {
+    if (!searchQuery.trim() || searchQuery.length < 2) return [];
+    const q = searchQuery.toLowerCase();
+    const results: { id: string; label: string; sub: string; type: 'study' | 'chart' }[] = [];
+    studies.forEach(s => {
+      const dateStr = s.exam_date
+        ? new Date(s.exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+        : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+      (s.biomarkers ?? []).forEach(bm => {
+        if (bm.name.toLowerCase().includes(q)) {
+          results.push({ id: `bm-study-${s.id}-${bm.name.replace(/\s+/g, '-')}`, label: bm.name, sub: `📊 Estudio del ${dateStr} · ${bm.value} ${bm.unit}`, type: 'study' });
+        }
+      });
+    });
+    const seen = new Set<string>();
+    studies.forEach(s => {
+      (s.biomarkers ?? []).forEach(bm => {
+        if (bm.name.toLowerCase().includes(q) && !seen.has(bm.name)) {
+          seen.add(bm.name);
+          results.push({ id: `bm-chart-${bm.name.replace(/\s+/g, '-')}`, label: bm.name, sub: `📈 Gráfica de evolución clínica`, type: 'chart' });
+        }
+      });
+    });
+    return results.slice(0, 14);
+  })();
 
   const calculateAge = (birthDate: string) => {
     const today = new Date();
@@ -318,34 +360,80 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             </div>
           </div>
         )}
-        {/* Entrevista button — premium progress */}
-        <button
-          onClick={() => router.push(`/pacientes/${id}/entrevista`)}
-          style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', padding: '12px 20px', borderRadius: '12px', border: '1px solid rgba(212,175,55,0.5)', background: 'rgba(212,175,55,0.06)', color: 'var(--gold-primary)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '190px', transition: 'background 0.2s' }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', gap: '16px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.75, lineHeight: 1.3 }}>📋 Entrevista<br/>Clínica</span>
-            <span style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{interviewPct}<span style={{ fontSize: '13px', fontWeight: 600, opacity: 0.7 }}>%</span></span>
+        {/* Search + Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end' }}>
+          <button onClick={() => setIsSearchOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.05)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px', fontFamily: 'var(--font-main)', whiteSpace: 'nowrap' }}>
+            🔍 Buscar marcador
+          </button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button onClick={() => router.push(`/pacientes/${id}/entrevista`)} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', padding: '12px 20px', borderRadius: '12px', border: '1px solid rgba(212,175,55,0.5)', background: 'rgba(212,175,55,0.06)', color: 'var(--gold-primary)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '190px', transition: 'background 0.2s' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', gap: '16px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.75, lineHeight: 1.3 }}>📋 Entrevista<br/>Clínica</span>
+                <span style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{interviewPct}<span style={{ fontSize: '13px', fontWeight: 600, opacity: 0.7 }}>%</span></span>
+              </div>
+              <div style={{ height: '3px', borderRadius: '99px', background: 'rgba(212,175,55,0.15)', overflow: 'hidden', width: '100%' }}>
+                <div style={{ height: '100%', width: `${interviewPct}%`, background: 'linear-gradient(90deg, rgba(212,175,55,0.7), var(--gold-primary))', borderRadius: '99px', transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
+              </div>
+            </button>
+            <button onClick={() => router.push(`/pacientes/${id}/reporte`)} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'var(--gold-primary)', color: '#1a1a18', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '190px', transition: 'opacity 0.2s' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', gap: '16px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.65, lineHeight: 1.3 }}>📄 Reporte<br/>Maestro</span>
+                <span style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{reportPct}<span style={{ fontSize: '13px', fontWeight: 600, opacity: 0.6 }}>%</span></span>
+              </div>
+              <div style={{ height: '3px', borderRadius: '99px', background: 'rgba(0,0,0,0.18)', overflow: 'hidden', width: '100%' }}>
+                <div style={{ height: '100%', width: `${reportPct}%`, background: 'rgba(0,0,0,0.45)', borderRadius: '99px', transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
+              </div>
+            </button>
           </div>
-          <div style={{ height: '3px', borderRadius: '99px', background: 'rgba(212,175,55,0.15)', overflow: 'hidden', width: '100%' }}>
-            <div style={{ height: '100%', width: `${interviewPct}%`, background: 'linear-gradient(90deg, rgba(212,175,55,0.7), var(--gold-primary))', borderRadius: '99px', transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
-          </div>
-        </button>
-
-        {/* Reporte button — premium progress */}
-        <button
-          onClick={() => router.push(`/pacientes/${id}/reporte`)}
-          style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'var(--gold-primary)', color: '#1a1a18', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '190px', transition: 'opacity 0.2s' }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', gap: '16px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.65, lineHeight: 1.3 }}>📄 Reporte<br/>Maestro</span>
-            <span style={{ fontSize: '26px', fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{reportPct}<span style={{ fontSize: '13px', fontWeight: 600, opacity: 0.6 }}>%</span></span>
-          </div>
-          <div style={{ height: '3px', borderRadius: '99px', background: 'rgba(0,0,0,0.18)', overflow: 'hidden', width: '100%' }}>
-            <div style={{ height: '100%', width: `${reportPct}%`, background: 'rgba(0,0,0,0.45)', borderRadius: '99px', transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
-          </div>
-        </button>
+        </div>
       </header>
+
+      {/* ── Smart Search Overlay ── */}
+      {isSearchOpen && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', justifyContent: 'center', paddingTop: '80px' }} onClick={() => setIsSearchOpen(false)}>
+          <div style={{ width: '560px', background: 'var(--bg-surface)', borderRadius: '16px', border: '1px solid var(--border-subtle)', boxShadow: '0 24px 64px rgba(0,0,0,0.6)', overflow: 'hidden', height: 'fit-content', maxHeight: '70vh' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <span style={{ fontSize: '18px' }}>🔍</span>
+              <input
+                autoFocus
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Buscar marcador... ej: HbA1c, Vitamina D, Glucosa"
+                style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '16px', fontFamily: 'var(--font-main)' }}
+              />
+              <button onClick={() => setIsSearchOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px' }}>ESC</button>
+            </div>
+            {searchResults.length === 0 && searchQuery.length >= 2 && (
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px', fontSize: '14px' }}>No se encontró ningún marcador con ese nombre</p>
+            )}
+            {searchResults.length === 0 && searchQuery.length < 2 && (
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px', fontSize: '13px' }}>Escribe al menos 2 caracteres para buscar</p>
+            )}
+            <div style={{ overflowY: 'auto', maxHeight: 'calc(70vh - 70px)' }}>
+              {searchResults.map((r, i) => (
+                <button key={i} onClick={() => scrollToMarker(r.id)}
+                  style={{ width: '100%', textAlign: 'left', padding: '12px 20px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.15s' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(212,175,55,0.06)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ fontSize: '20px' }}>{r.type === 'study' ? '📊' : '📈'}</span>
+                  <div>
+                    <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{r.label}</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{r.sub}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Glow CSS */}
+      <style>{`
+        @keyframes pdi-glow { 0%,100%{box-shadow:0 0 0 rgba(212,175,55,0)} 30%{box-shadow:0 0 0 4px rgba(212,175,55,0.5),0 0 24px rgba(212,175,55,0.3)} }
+        .pdi-glow-active { animation: pdi-glow 2.5s ease !important; border-color: rgba(212,175,55,0.8) !important; }
+      `}</style>
 
       {/* ── Main Grid — dual scroll ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: '0', flex: 1, overflow: 'hidden' }}>
@@ -515,39 +603,47 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           </section>
 
           {/* Global Biomarker Cards — grouped by system */}
-          {analysisResult && Object.entries(biomarkersBySystem).map(([system, bms]) => (
+          {analysisResult && studies.length > 0 && Object.entries(
+            studies[0]?.biomarkers?.reduce((acc, b) => { if (!acc[b.system]) acc[b.system] = []; acc[b.system].push(b); return acc; }, {} as Record<string, typeof studies[0]['biomarkers']>) ?? {}
+          ).map(([system, bms]) => (
             <section key={system} style={styles.card}>
               <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
                 {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
               </h3>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
-                {bms.map((b, i) => (
-                  <div key={i} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: '12px 16px', borderRadius: '8px',
-                    border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.4)' : 'var(--border-subtle)'}`,
-                    background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.05)' : 'var(--bg-main)'
-                  }}>
-                    <div>
-                      <p style={{ margin: 0, fontSize: '13px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
-                      {b.referenceRange && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.referenceRange} {b.unit}</p>}
+                {(bms ?? []).map((b, i) => {
+                  const elemId = `bm-study-${studies[0].id}-${b.name.replace(/\s+/g, '-')}`;
+                  const isGlowing = glowId === elemId;
+                  return (
+                    <div key={i} id={elemId} className={isGlowing ? 'pdi-glow-active' : ''} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '12px 16px', borderRadius: '8px',
+                      border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.4)' : 'var(--border-subtle)'}`,
+                      background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.05)' : 'var(--bg-main)',
+                      transition: 'border-color 0.3s'
+                    }}>
+                      <div>
+                        <p style={{ margin: 0, fontSize: '13px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
+                        {(b as any).referenceRange && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {(b as any).referenceRange} {b.unit}</p>}
+                        {b.reference_range && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range} {b.unit}</p>}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)' }}>
+                          {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
+                        </p>
+                        {b.flag !== 'Normal' && (
+                          <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)' }}>
-                        {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
-                      </p>
-                      {b.flag !== 'Normal' && (
-                        <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </section>
           ))}
 
           {/* ── Evolución Clínica en el Tiempo ── */}
-          {studies.length > 0 && <EvolutionCharts studies={studies} />}
+          {studies.length > 0 && <EvolutionCharts studies={studies} glowId={glowId} />}
 
           {/* ── Historial de Consultas al Asistente ── */}
           {chatHistory.length > 0 && (

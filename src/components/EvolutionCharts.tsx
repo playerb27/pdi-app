@@ -11,6 +11,11 @@ interface BiomarkerTimeSeries {
   points: { date: string; value: number; flag: string }[];
 }
 
+interface Props {
+  studies: Study[];
+  glowId?: string | null;
+}
+
 const MASTER_INDEX: Record<string, string> = {
   'Fundamentos y Resumen Ejecutivo': '📋',
   'Sistema Metabólico y Energético': '⚡',
@@ -29,7 +34,7 @@ const MASTER_INDEX: Record<string, string> = {
 };
 
 // ─── Mini SVG sparkline for a single biomarker ────────────────────────────────
-function BiomarkerSparkline({ series }: { series: BiomarkerTimeSeries }) {
+function BiomarkerSparkline({ series, isGlowing }: { series: BiomarkerTimeSeries; isGlowing?: boolean }) {
   const W = 280, H = 90;
   const PAD = { top: 10, right: 14, bottom: 28, left: 14 };
   const innerW = W - PAD.left - PAD.right;
@@ -56,7 +61,7 @@ function BiomarkerSparkline({ series }: { series: BiomarkerTimeSeries }) {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; pt: typeof lastPt } | null>(null);
 
   return (
-    <div style={{ background: 'var(--bg-main)', borderRadius: '10px', border: `1px solid ${lastPt.flag !== 'Normal' ? `${lineColor}40` : 'var(--border-subtle)'}`, padding: '14px 16px', minWidth: '280px' }}>
+    <div style={{ background: 'var(--bg-main)', borderRadius: '10px', border: `1px solid ${isGlowing ? 'rgba(212,175,55,0.8)' : lastPt.flag !== 'Normal' ? `${lineColor}40` : 'var(--border-subtle)'}`, padding: '14px 16px', minWidth: '280px', transition: 'border-color 0.3s', animation: isGlowing ? 'pdi-glow 2.5s ease' : 'none' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
         <div>
@@ -146,15 +151,19 @@ function BiomarkerSparkline({ series }: { series: BiomarkerTimeSeries }) {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function EvolutionCharts({ studies }: { studies: Study[] }) {
+export default function EvolutionCharts({ studies, glowId }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
 
   // Build time series per biomarker across all studies
   const timeSeriesMap = useMemo<Record<string, BiomarkerTimeSeries>>(() => {
     const map: Record<string, BiomarkerTimeSeries> = {};
 
-    // Sort studies by date ascending for correct timeline
-    const sortedStudies = [...studies].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    // Sort studies by exam_date (preferred) or created_at ascending
+    const sortedStudies = [...studies].sort((a, b) => {
+      const da = new Date((a as any).exam_date ?? a.created_at).getTime();
+      const db = new Date((b as any).exam_date ?? b.created_at).getTime();
+      return da - db;
+    });
 
     for (const study of sortedStudies) {
       if (!study.biomarkers) continue;
@@ -171,7 +180,7 @@ export default function EvolutionCharts({ studies }: { studies: Study[] }) {
           };
         }
         map[bm.name].points.push({
-          date: study.created_at,
+          date: (study as any).exam_date ?? study.created_at,
           value: numVal,
           flag: bm.flag,
         });
@@ -248,9 +257,14 @@ export default function EvolutionCharts({ studies }: { studies: Study[] }) {
                 {MASTER_INDEX[sys] ?? '🔬'} {sys}
               </p>
               <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                {list.map(series => (
-                  <BiomarkerSparkline key={series.name} series={series} />
-                ))}
+                {list.map(series => {
+                  const elemId = `bm-chart-${series.name.replace(/\s+/g, '-')}`;
+                  return (
+                    <div key={series.name} id={elemId}>
+                      <BiomarkerSparkline series={series} isGlowing={glowId === elemId} />
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
