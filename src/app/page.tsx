@@ -43,7 +43,7 @@ export default function Dashboard() {
         }),
       });
       const data = await res.json();
-      setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: data.reply ?? data.error ?? 'Sin respuesta' } }));
+      setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: data.response ?? data.error ?? 'Sin respuesta' } }));
     } catch {
       setBriefs(prev => ({ ...prev, [patientId]: { loading: false, text: 'Error al generar el resumen.' } }));
     }

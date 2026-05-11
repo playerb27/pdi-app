@@ -1,12 +1,37 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
 export async function POST(req: Request) {
   try {
-    const { patient, studies, interviewAnswers, chatHistory, message } = await req.json();
+    const body = await req.json();
+    let { patient, studies, interviewAnswers, chatHistory, message, patientId } = body;
 
+    // If only patientId was provided (e.g. from dashboard brief button), fetch everything
+    if (patientId && !patient) {
+      const { data: p } = await supabase.from('patients').select('*').eq('id', patientId).single();
+      patient = p;
+      const { data: studiesData } = await supabase
+        .from('studies')
+        .select('*, biomarkers(*)')
+        .eq('patient_id', patientId)
+        .order('created_at', { ascending: false });
+      studies = studiesData ?? [];
+      const { data: answers } = await supabase
+        .from('interview_answers')
+        .select('question_id, answer')
+        .eq('patient_id', patientId);
+      interviewAnswers = Object.fromEntries((answers ?? []).map((a: any) => [a.question_id, a.answer]));
+    }
+
+    if (!patient) return NextResponse.json({ error: 'Paciente no encontrado' }, { status: 404 });
+    chatHistory = chatHistory ?? [];
     const age = (() => {
       if (!patient.birth_date) return '';
       const today = new Date();
