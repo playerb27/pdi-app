@@ -289,7 +289,7 @@ export default function Dashboard() {
               const statusColor = interviewPct === 100 && prog.studyCount > 0 ? '#22c55e' : 'var(--gold-primary)';
 
               return (
-                <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '20px', alignItems: 'center', padding: '16px 20px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', transition: 'border-color 0.2s' }}>
+                <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: '20px', alignItems: 'center', padding: '16px 20px', paddingBottom: briefs[p.id]?.text ? '0' : '16px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', transition: 'border-color 0.2s' }}>
 
                   {/* Patient info */}
                   <div>
@@ -309,7 +309,7 @@ export default function Dashboard() {
                     onMouseLeave={e => { if (!briefs[p.id]?.text) { (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)'; }}}
                   >
                     {briefs[p.id]?.loading
-                      ? <span style={{ fontSize: '16px', animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span>
+                      ? <span style={{ fontSize: '16px' }}>⏳</span>
                       : <Zap size={16} fill={briefs[p.id]?.text ? 'currentColor' : 'none'} />}
                     <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>Brief</span>
                   </button>
@@ -340,20 +340,20 @@ export default function Dashboard() {
                   <button onClick={() => router.push(`/pacientes/${p.id}`)} style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>
                     Ver Expediente
                   </button>
-                </div>
 
-                {/* ── Brief IA panel (expands below the card) ── */}
-                {briefs[p.id]?.text && (
-                  <div style={{ gridColumn: '1 / -1', padding: '16px 20px', borderTop: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.03)', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                      <Zap size={16} color="var(--gold-primary)" style={{ marginTop: '3px', flexShrink: 0 }} fill="var(--gold-primary)" />
-                      <div>
-                        <p style={{ margin: '0 0 4px', fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--gold-primary)', opacity: 0.8 }}>Brief Clínico · IA</p>
-                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{briefs[p.id].text}</p>
+                  {/* ── Brief IA panel — spans full width inside the grid ── */}
+                  {briefs[p.id]?.text && (
+                    <div style={{ gridColumn: '1 / -1', margin: '4px -20px -4px', padding: '16px 20px', borderTop: '1px solid var(--border-subtle)', background: 'rgba(212,175,55,0.03)', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                        <Zap size={15} color="var(--gold-primary)" style={{ marginTop: '3px', flexShrink: 0 }} fill="var(--gold-primary)" />
+                        <div>
+                          <p style={{ margin: '0 0 6px', fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--gold-primary)', opacity: 0.85 }}>Brief Clínico · IA</p>
+                          <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>{briefs[p.id].text}</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               );
             })
           )}
