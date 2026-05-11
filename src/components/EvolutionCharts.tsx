@@ -16,6 +16,55 @@ interface Props {
   glowId?: string | null;
 }
 
+// ─── Biomarker name normalization ─────────────────────────────────────────────
+// Strips lab-specific suffixes and maps aliases to a canonical name so that
+// "Vitamina D (25 Hidroxi) en Sangre" and "Vitamina D (25 Hidroxi)" merge.
+const CANONICAL_ALIASES: [RegExp, string][] = [
+  // Vitamina D variants
+  [/vitamina\s*d\s*[\(\[]?\s*25[\s-]*hidro[xq]i?\s*[\)\]]?\s*(en\s+sangre|en\s+suero|sérica|plasmática)?/i, 'Vitamina D 25-Hidroxi'],
+  [/25[\s-]*(oh|hidro[xq]i)\s*(vitamina\s*d\s*3?|d\s*3?)?/i, 'Vitamina D 25-Hidroxi'],
+  [/calcifediol/i, 'Vitamina D 25-Hidroxi'],
+  // HbA1c variants
+  [/hemoglobina\s*gl[iy]cosilada/i, 'HbA1c'],
+  [/hb\s*a\s*1\s*c/i, 'HbA1c'],
+  [/a1c/i, 'HbA1c'],
+  // Cholesterol variants
+  [/colesterol\s*ldl\s*(calculado|directo|en\s+sangre|en\s+suero)?/i, 'Colesterol LDL'],
+  [/colesterol\s*hdl\s*(en\s+sangre|en\s+suero)?/i, 'Colesterol HDL'],
+  [/colesterol\s*total\s*(en\s+sangre|en\s+suero)?/i, 'Colesterol Total'],
+  // Creatinine
+  [/creatinina\s*(en\s+sangre|sérica|en\s+suero)?/i, 'Creatinina'],
+  // Urea / BUN
+  [/urea\s*(en\s+sangre|nitrógeno|bun)?/i, 'Urea'],
+  [/nitrógeno\s*ur[ée]ico\s*(en\s+sangre)?/i, 'Urea'],
+  // Glucose
+  [/glucosa\s*(en\s+sangre|en\s+suero|sérica)?/i, 'Glucosa'],
+  // TSH
+  [/tsh\s*(ultrasensible|hs|alta\s*sensibilidad)?/i, 'TSH'],
+  // Vitamina B12
+  [/vitamina\s*b\s*12\s*(en\s+sangre|sérica)?/i, 'Vitamina B12'],
+  // Ferritin
+  [/ferritina\s*(en\s+sangre|sérica)?/i, 'Ferritina'],
+  // Iron
+  [/hierro\s*(sérico|en\s+sangre|total)?/i, 'Hierro'],
+  // Strip generic suffixes for everything else
+  [/\s+(en\s+sangre|en\s+suero|en\s+plasma|séric[oa]|plasmátic[oa])$/i, ''],
+];
+
+function normalizeBiomarkerName(raw: string): string {
+  const trimmed = raw.trim();
+  // 1. Check explicit canonical aliases first
+  for (const [pattern, canonical] of CANONICAL_ALIASES) {
+    if (canonical !== '' && pattern.test(trimmed)) return canonical;
+  }
+  // 2. Strip generic suffixes (entries with empty canonical = suffix stripper)
+  let result = trimmed;
+  for (const [pattern, replacement] of CANONICAL_ALIASES) {
+    if (replacement === '') result = result.replace(pattern, '').trim();
+  }
+  return result || trimmed;
+}
+
 const MASTER_INDEX: Record<string, string> = {
   'Fundamentos y Resumen Ejecutivo': '📋',
   'Sistema Metabólico y Energético': '⚡',
@@ -170,16 +219,17 @@ export default function EvolutionCharts({ studies, glowId }: Props) {
       for (const bm of study.biomarkers) {
         const numVal = parseFloat(bm.value);
         if (isNaN(numVal)) continue;
-        if (!map[bm.name]) {
-          map[bm.name] = {
-            name: bm.name,
+        const canonicalName = normalizeBiomarkerName(bm.name);
+        if (!map[canonicalName]) {
+          map[canonicalName] = {
+            name: canonicalName,
             unit: bm.unit,
             system: bm.system,
             referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range,
             points: [],
           };
         }
-        map[bm.name].points.push({
+        map[canonicalName].points.push({
           date: (study as any).exam_date ?? study.created_at,
           value: numVal,
           flag: bm.flag,
