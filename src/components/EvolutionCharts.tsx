@@ -1,29 +1,14 @@
 'use client';
 import { useState, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-
-interface Biomarker {
-  name: string;
-  value: string;
-  unit: string;
-  referenceRange?: string;
-  flag: 'Normal' | 'Alto' | 'Bajo';
-  system: string;
-}
-
-interface Study {
-  id: string;
-  file_name: string;
-  created_at: string;
-  biomarkers?: Biomarker[];
-}
+import type { Study } from '@/lib/api';
 
 interface BiomarkerTimeSeries {
   name: string;
   unit: string;
   system: string;
   referenceRange?: string;
-  points: { date: string; value: number; flag: 'Normal' | 'Alto' | 'Bajo' }[];
+  points: { date: string; value: number; flag: string }[];
 }
 
 const MASTER_INDEX: Record<string, string> = {
@@ -188,7 +173,7 @@ export default function EvolutionCharts({ studies }: { studies: Study[] }) {
         map[bm.name].points.push({
           date: study.created_at,
           value: numVal,
-          flag: bm.flag as 'Normal' | 'Alto' | 'Bajo',
+          flag: bm.flag,
         });
       }
     }
