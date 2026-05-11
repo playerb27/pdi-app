@@ -69,11 +69,27 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
   // Chat Assistant State
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string}[]>([]);
+  const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string, timestamp?: string}[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [showChatHistory, setShowChatHistory] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  
+
+  // Cargar historial guardado al entrar al perfil del paciente
+  useEffect(() => {
+    if (!id) return;
+    try {
+      const saved = localStorage.getItem(`pdi_chat_${id}`);
+      if (saved) setChatHistory(JSON.parse(saved));
+    } catch {}
+  }, [id]);
+
+  // Guardar historial cada vez que cambia
+  useEffect(() => {
+    if (!id || chatHistory.length === 0) return;
+    localStorage.setItem(`pdi_chat_${id}`, JSON.stringify(chatHistory));
+  }, [chatHistory, id]);
+
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isChatOpen]);
@@ -184,7 +200,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     
     const userMsg = chatInput.trim();
     setChatInput('');
-    setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
+    const timestamp = new Date().toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    setChatHistory(prev => [...prev, { role: 'user', text: userMsg, timestamp }]);
     setIsChatLoading(true);
 
     try {
@@ -196,8 +213,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      
-      setChatHistory(prev => [...prev, { role: 'model', text: data.response }]);
+      const ts = new Date().toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+      setChatHistory(prev => [...prev, { role: 'model', text: data.response, timestamp: ts }]);
     } catch (err: any) {
       alert("Error en el asistente: " + err.message);
     } finally {
@@ -531,6 +548,49 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
           {/* ── Evolución Clínica en el Tiempo ── */}
           {studies.length > 0 && <EvolutionCharts studies={studies} />}
+
+          {/* ── Historial de Consultas al Asistente ── */}
+          {chatHistory.length > 0 && (
+            <section style={{ backgroundColor: 'var(--bg-surface)', borderRadius: '12px', border: '1px solid var(--border-subtle)', padding: '28px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <Bot color="var(--gold-primary)" size={22} />
+                  <div>
+                    <h2 style={{ fontSize: '18px', margin: 0, color: 'var(--text-primary)', fontFamily: 'var(--font-main)' }}>Historial de Consultas</h2>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0' }}>{chatHistory.filter(m => m.role === 'user').length} preguntas registradas</p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button onClick={() => setShowChatHistory(!showChatHistory)} style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                    {showChatHistory ? 'Ocultar' : 'Ver todo'}
+                  </button>
+                  <button onClick={() => setIsChatOpen(true)} style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-main)' }}>
+                    Nueva Consulta
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: showChatHistory ? '9999px' : '320px', overflow: 'hidden', transition: 'max-height 0.4s ease' }}>
+                {chatHistory.map((msg, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'user' ? 'var(--gold-primary)' : 'rgba(212,175,55,0.1)', border: msg.role === 'model' ? '1px solid rgba(212,175,55,0.3)' : 'none' }}>
+                      {msg.role === 'user' ? <span style={{ fontSize: '14px' }}>👤</span> : <Bot size={16} color="var(--gold-primary)" />}
+                    </div>
+                    <div style={{ flex: 1, maxWidth: '85%' }}>
+                      <div style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.7, backgroundColor: msg.role === 'user' ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', border: `1px solid ${msg.role === 'user' ? 'rgba(212,175,55,0.2)' : 'var(--border-subtle)'}`, color: 'var(--text-primary)' }}>
+                        {msg.text.split('\n').filter(l => l.trim()).map((line, j) => <p key={j} style={{ margin: '0 0 6px 0' }}>{line}</p>)}
+                      </div>
+                      {msg.timestamp && <p style={{ margin: '4px 0 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {!showChatHistory && chatHistory.length > 4 && (
+                <button onClick={() => setShowChatHistory(true)} style={{ width: '100%', marginTop: '12px', padding: '8px', background: 'transparent', border: '1px solid var(--border-subtle)', borderRadius: '8px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                  Ver {chatHistory.length - 4} mensajes más
+                </button>
+              )}
+            </section>
+          )}
         </div>
 
         {/* ── RIGHT: Árbol Sistémico — scrollable independently ── */}
@@ -611,64 +671,71 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         {isChatOpen ? <X size={28} color="#000" /> : <Bot size={28} color="#000" />}
       </button>
 
-      {/* Chat Window */}
+      {/* Chat Window — grande y legible */}
       {isChatOpen && (
         <div style={{
-          position: 'fixed', bottom: '120px', right: '40px', width: '400px', height: '600px',
+          position: 'fixed', bottom: '120px', right: '40px', width: '560px', height: '720px',
           backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
-          borderRadius: '16px', boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+          borderRadius: '16px', boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 100
         }}>
           {/* Header */}
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <Bot size={24} color="var(--gold-primary)" />
-            <div>
-              <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-primary)' }}>Asistente Clínico PDI</h3>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Análisis basado en el expediente de {patient.full_name}</span>
+          <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <Bot size={26} color="var(--gold-primary)" />
+            <div style={{ flex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)' }}>Asistente Clínico PDI</h3>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Expediente: {patient.full_name}</span>
             </div>
+            <button
+              onClick={() => { if (confirm('¿Limpiar historial de consultas de este paciente?')) { setChatHistory([]); localStorage.removeItem(`pdi_chat_${id}`); } }}
+              style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', padding: '4px 10px', fontFamily: 'var(--font-main)' }}
+            >
+              Limpiar
+            </button>
           </div>
-          
           {/* Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
             {chatHistory.length === 0 && (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', marginTop: '20px' }}>
-                Hola, soy el asistente clínico. Conozco todos los estudios y respuestas de este paciente. ¿Qué deseas consultar?
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '16px', marginTop: '40px', lineHeight: 1.6 }}>
+                🧠 Hola, soy el asistente clínico.<br/>Conozco todos los estudios y respuestas de este paciente.<br/>
+                <span style={{ fontSize: '14px' }}>¿Qué deseas consultar?</span>
               </div>
             )}
             {chatHistory.map((msg, i) => (
-              <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
+              <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%' }}>
                 <div style={{
-                  padding: '12px 16px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.5,
+                  padding: '14px 18px', borderRadius: '14px', fontSize: '15px', lineHeight: 1.65,
                   backgroundColor: msg.role === 'user' ? 'var(--gold-primary)' : 'var(--bg-main)',
                   color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
-                  borderBottomRightRadius: msg.role === 'user' ? '4px' : '12px',
-                  borderBottomLeftRadius: msg.role === 'model' ? '4px' : '12px',
+                  borderBottomRightRadius: msg.role === 'user' ? '4px' : '14px',
+                  borderBottomLeftRadius: msg.role === 'model' ? '4px' : '14px',
                 }}>
-                  {msg.text.split('\n').map((line, j) => <p key={j} style={{ margin: '0 0 8px 0' }}>{line}</p>)}
+                  {msg.text.split('\n').map((line, j) => line.trim() ? <p key={j} style={{ margin: '0 0 8px 0' }}>{line}</p> : null)}
                 </div>
+                {msg.timestamp && <p style={{ margin: '4px 4px 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
               </div>
             ))}
             {isChatLoading && (
-              <div style={{ alignSelf: 'flex-start', display: 'flex', gap: '8px', alignItems: 'center', padding: '12px', backgroundColor: 'var(--bg-main)', borderRadius: '12px', borderBottomLeftRadius: '4px' }}>
-                <Loader2 size={16} className="spin" color="var(--gold-primary)" />
-                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Analizando expediente...</span>
+              <div style={{ alignSelf: 'flex-start', display: 'flex', gap: '10px', alignItems: 'center', padding: '14px 18px', backgroundColor: 'var(--bg-main)', borderRadius: '14px', borderBottomLeftRadius: '4px' }}>
+                <Loader2 size={18} className="spin" color="var(--gold-primary)" />
+                <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>Analizando expediente...</span>
               </div>
             )}
             <div ref={chatEndRef} />
           </div>
 
           {/* Input */}
-          <form onSubmit={handleChatSubmit} style={{ padding: '16px', borderTop: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', gap: '12px' }}>
+          <form onSubmit={handleChatSubmit} style={{ padding: '18px', borderTop: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', gap: '12px' }}>
             <input
               type="text"
               value={chatInput}
               onChange={e => setChatInput(e.target.value)}
               placeholder="Haz una pregunta clínica..."
-              style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', color: 'var(--text-primary)', fontSize: '13px', outline: 'none' }}
+              style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '10px', padding: '14px 18px', color: 'var(--text-primary)', fontSize: '15px', outline: 'none', fontFamily: 'var(--font-main)' }}
               disabled={isChatLoading}
             />
-            <button type="submit" disabled={isChatLoading || !chatInput.trim()} style={{ background: 'var(--gold-primary)', border: 'none', borderRadius: '8px', width: '44px', height: '44px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: (isChatLoading || !chatInput.trim()) ? 'not-allowed' : 'pointer', opacity: (isChatLoading || !chatInput.trim()) ? 0.5 : 1 }}>
-              <Send size={18} color="#000" />
+            <button type="submit" disabled={isChatLoading || !chatInput.trim()} style={{ background: 'var(--gold-primary)', border: 'none', borderRadius: '10px', width: '50px', height: '50px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: (isChatLoading || !chatInput.trim()) ? 'not-allowed' : 'pointer', opacity: (isChatLoading || !chatInput.trim()) ? 0.5 : 1 }}>
+              <Send size={20} color="#000" />
             </button>
           </form>
         </div>
