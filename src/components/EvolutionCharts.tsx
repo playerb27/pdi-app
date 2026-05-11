@@ -161,12 +161,14 @@ export default function EvolutionCharts({ studies, glowId }: Props) {
   const timeSeriesMap = useMemo<Record<string, BiomarkerTimeSeries>>(() => {
     const map: Record<string, BiomarkerTimeSeries> = {};
 
-    // Sort studies by exam_date (preferred) or created_at ascending
-    const sortedStudies = [...studies].sort((a, b) => {
-      const da = new Date((a as any).exam_date ?? a.created_at).getTime();
-      const db = new Date((b as any).exam_date ?? b.created_at).getTime();
-      return da - db;
-    });
+    // Sort studies by exam_date → filename date → created_at
+    const getStudyDate = (s: Study) => {
+      const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+      return (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+    };
+    const sortedStudies = [...studies].sort((a, b) =>
+      new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime()
+    );
 
     for (const study of sortedStudies) {
       if (!study.biomarkers) continue;
@@ -184,7 +186,7 @@ export default function EvolutionCharts({ studies, glowId }: Props) {
           };
         }
         map[canonicalName].points.push({
-          date: (study as any).exam_date ?? study.created_at,
+          date: getStudyDate(study),
           value: numVal,
           flag: bm.flag,
         });
