@@ -19,7 +19,9 @@ export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number }>>({});
+  const [progress, setProgress] = useState<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }>>({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortOption, setSortOption] = useState('fecha_desc');
 
   // Form state
   const [formData, setFormData] = useState({
@@ -215,10 +217,18 @@ export default function Dashboard() {
       {/* Patient List */}
       <section style={styles.listSection}>
         <div style={styles.listHeader}>
-          <h2 style={styles.sectionTitle}>Pacientes Recientes</h2>
-          <div style={styles.searchBox}>
-            <Search size={16} color="var(--text-muted)" />
-            <input type="text" placeholder="Buscar por nombre..." style={styles.searchInput} />
+          <h2 style={styles.sectionTitle}>Dashboard de Pacientes</h2>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <select value={sortOption} onChange={(e) => setSortOption(e.target.value)} style={{ ...styles.searchInput, border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '8px 16px', backgroundColor: 'var(--bg-main)' }}>
+              <option value="fecha_desc">Más recientes primero</option>
+              <option value="fecha_asc">Más antiguos primero</option>
+              <option value="avance_desc">Mayor avance clínico</option>
+              <option value="avance_asc">Menor avance clínico</option>
+            </select>
+            <div style={styles.searchBox}>
+              <Search size={16} color="var(--text-muted)" />
+              <input type="text" placeholder="Buscar por nombre..." style={styles.searchInput} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+            </div>
           </div>
         </div>
 
@@ -228,11 +238,36 @@ export default function Dashboard() {
           ) : patients.length === 0 ? (
             <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '32px' }}>No hay pacientes registrados aún.</p>
           ) : (
-            patients.map((p) => {
-              const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0 };
-              const interviewPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
-              const reportPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
-              const age = (() => { const b = new Date(p.birth_date), t = new Date(); return t.getFullYear() - b.getFullYear(); })();
+            (() => {
+              const filteredPatients = patients.filter(p => p.full_name.toLowerCase().includes(searchQuery.toLowerCase()));
+              const sortedPatients = filteredPatients.sort((a, b) => {
+                if (sortOption === 'fecha_desc') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                if (sortOption === 'fecha_asc') return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+                
+                const getScore = (p: Patient) => {
+                  const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
+                  const intPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
+                  const repPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
+                  return intPct + repPct;
+                };
+                if (sortOption === 'avance_desc') return getScore(b) - getScore(a);
+                if (sortOption === 'avance_asc') return getScore(a) - getScore(b);
+                return 0;
+              });
+
+              return sortedPatients.map((p) => {
+                const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
+                const interviewPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
+                const reportPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
+                const age = (() => { const b = new Date(p.birth_date), t = new Date(); return t.getFullYear() - b.getFullYear(); })();
+
+                const nextAction = (() => {
+                  if (interviewPct < 100) return "Completar Entrevista";
+                  if (prog.studyCount === 0) return "Subir Estudios de Laboratorio";
+                  if (reportPct < 100) return "Generar Reporte Maestro";
+                  return "Revisar Expediente";
+                })();
+                const statusColor = interviewPct === 100 && prog.studyCount > 0 ? '#22c55e' : 'var(--gold-primary)';
 
               return (
                 <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '20px', alignItems: 'center', padding: '16px 20px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', transition: 'border-color 0.2s' }}>
@@ -241,9 +276,9 @@ export default function Dashboard() {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '15px' }}>{p.full_name}</span>
-                      <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '99px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.25)', color: 'var(--gold-primary)', fontWeight: 600, letterSpacing: '0.05em' }}>{p.status}</span>
+                      <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '99px', background: `${statusColor}15`, border: `1px solid ${statusColor}40`, color: statusColor, fontWeight: 600, letterSpacing: '0.05em' }}>Próximo paso: {nextAction}</span>
                     </div>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.gender === 'male' ? 'Hombre' : 'Mujer'} · {age} años · {new Date(p.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{p.gender === 'male' ? 'Hombre' : 'Mujer'} · {age} años · Inicio: {new Date(p.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
                   </div>
 
                   {/* Entrevista mini widget */}
@@ -275,6 +310,7 @@ export default function Dashboard() {
                 </div>
               );
             })
+            })();
           )}
         </div>
       </section>

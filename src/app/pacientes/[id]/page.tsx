@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2 } from 'lucide-react';
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
+import EvolutionCharts from '@/components/EvolutionCharts';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -72,6 +73,22 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  
+  // Persistir historial de chat en localStorage para futuras revisiones
+  useEffect(() => {
+    if (id) {
+      const savedChat = localStorage.getItem(`pdi_chat_history_${id}`);
+      if (savedChat) {
+        try { setChatHistory(JSON.parse(savedChat)); } catch (e) { console.error("Error cargando historial de chat", e); }
+      }
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (chatHistory.length > 0) {
+      localStorage.setItem(`pdi_chat_history_${id}`, JSON.stringify(chatHistory));
+    }
+  }, [chatHistory, id]);
   
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
@@ -280,7 +297,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               <button onClick={() => setIsEditModalOpen(true)} style={{ ...styles.iconBtn, color: 'var(--gold-primary)' }}><Edit2 size={16} /></button>
             </div>
             <p style={{ color: 'var(--gold-primary)', fontSize: '13px', marginTop: '4px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-main)' }}>
-              {patient.gender === 'male' ? 'Hombre' : patient.gender === 'female' ? 'Mujer' : 'Otro'} · {calculateAge(patient.birth_date)} · {patient.status}
+              {patient.gender === 'male' ? 'Hombre' : patient.gender === 'female' ? 'Mujer' : 'Otro'} · {calculateAge(patient.birth_date)} · {interviewPct === 100 ? 'Entrevista Completada' : patient.status}
             </p>
           </div>
         </div>
@@ -527,6 +544,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               </div>
             </section>
           ))}
+
+          {/* ── Evolución Clínica en el Tiempo ── */}
+          {studies.length > 0 && <EvolutionCharts studies={studies} />}
         </div>
 
         {/* ── RIGHT: Árbol Sistémico — scrollable independently ── */}
@@ -610,7 +630,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       {/* Chat Window */}
       {isChatOpen && (
         <div style={{
-          position: 'fixed', bottom: '120px', right: '40px', width: '400px', height: '600px',
+          position: 'fixed', bottom: '120px', right: '40px', width: '500px', height: '700px',
           backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
           borderRadius: '16px', boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 100
@@ -618,23 +638,24 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           {/* Header */}
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '12px' }}>
             <Bot size={24} color="var(--gold-primary)" />
-            <div>
-              <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-primary)' }}>Asistente Clínico PDI</h3>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Análisis basado en el expediente de {patient.full_name}</span>
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)' }}>Asistente Clínico PDI</h3>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Análisis basado en el expediente de {patient.full_name}</span>
             </div>
+            <button onClick={() => { if(confirm('¿Limpiar historial de este paciente?')) { setChatHistory([]); localStorage.removeItem(`pdi_chat_history_${id}`); } }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline' }}>Limpiar Historial</button>
           </div>
           
           {/* Messages */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {chatHistory.length === 0 && (
-              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', marginTop: '20px' }}>
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '15px', marginTop: '20px' }}>
                 Hola, soy el asistente clínico. Conozco todos los estudios y respuestas de este paciente. ¿Qué deseas consultar?
               </div>
             )}
             {chatHistory.map((msg, i) => (
               <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
                 <div style={{
-                  padding: '12px 16px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.5,
+                  padding: '12px 16px', borderRadius: '12px', fontSize: '15px', lineHeight: 1.5,
                   backgroundColor: msg.role === 'user' ? 'var(--gold-primary)' : 'var(--bg-main)',
                   color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
                   borderBottomRightRadius: msg.role === 'user' ? '4px' : '12px',
@@ -660,7 +681,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               value={chatInput}
               onChange={e => setChatInput(e.target.value)}
               placeholder="Haz una pregunta clínica..."
-              style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', color: 'var(--text-primary)', fontSize: '13px', outline: 'none' }}
+              style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', color: 'var(--text-primary)', fontSize: '15px', outline: 'none' }}
               disabled={isChatLoading}
             />
             <button type="submit" disabled={isChatLoading || !chatInput.trim()} style={{ background: 'var(--gold-primary)', border: 'none', borderRadius: '8px', width: '44px', height: '44px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: (isChatLoading || !chatInput.trim()) ? 'not-allowed' : 'pointer', opacity: (isChatLoading || !chatInput.trim()) ? 0.5 : 1 }}>

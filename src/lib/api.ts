@@ -196,14 +196,15 @@ export async function deleteReportModules(patientId: string): Promise<void> {
 
 export async function getPatientProgressBatch(
   patientIds: string[]
-): Promise<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number }>> {
+): Promise<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }>> {
   if (patientIds.length === 0) return {};
-  const [{ data: interviews }, { data: reports }] = await Promise.all([
+  const [{ data: interviews }, { data: reports }, { data: studies }] = await Promise.all([
     supabase.from('interviews').select('patient_id').in('patient_id', patientIds),
     supabase.from('report_modules').select('patient_id, status').in('patient_id', patientIds),
+    supabase.from('studies').select('patient_id').in('patient_id', patientIds),
   ]);
-  const result: Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number }> = {};
-  patientIds.forEach(id => { result[id] = { interviewCount: 0, reportApproved: 0, reportGenerated: 0 }; });
+  const result: Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }> = {};
+  patientIds.forEach(id => { result[id] = { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 }; });
   (interviews || []).forEach((r: any) => { if (result[r.patient_id]) result[r.patient_id].interviewCount++; });
   (reports || []).forEach((r: any) => {
     if (result[r.patient_id]) {
@@ -211,6 +212,7 @@ export async function getPatientProgressBatch(
       if (r.status === 'approved') result[r.patient_id].reportApproved++;
     }
   });
+  (studies || []).forEach((r: any) => { if (result[r.patient_id]) result[r.patient_id].studyCount++; });
   return result;
 }
 
