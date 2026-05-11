@@ -172,6 +172,22 @@ export default function Dashboard() {
   }
 
   // --- PANTALLA PRINCIPAL (DASHBOARD) ---
+  const filteredPatients = patients
+    .filter(p => p.full_name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      if (sortOption === 'fecha_desc') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      if (sortOption === 'fecha_asc') return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      const getScore = (p: Patient) => {
+        const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
+        const intPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
+        const repPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
+        return intPct + repPct;
+      };
+      if (sortOption === 'avance_desc') return getScore(b) - getScore(a);
+      if (sortOption === 'avance_asc') return getScore(a) - getScore(b);
+      return 0;
+    });
+
   return (
     <div style={styles.container}>
       {/* Header */}
@@ -238,36 +254,13 @@ export default function Dashboard() {
           ) : patients.length === 0 ? (
             <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '32px' }}>No hay pacientes registrados aún.</p>
           ) : (
-            (() => {
-              const filteredPatients = patients.filter(p => p.full_name.toLowerCase().includes(searchQuery.toLowerCase()));
-              const sortedPatients = filteredPatients.sort((a, b) => {
-                if (sortOption === 'fecha_desc') return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-                if (sortOption === 'fecha_asc') return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-                
-                const getScore = (p: Patient) => {
-                  const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
-                  const intPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
-                  const repPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
-                  return intPct + repPct;
-                };
-                if (sortOption === 'avance_desc') return getScore(b) - getScore(a);
-                if (sortOption === 'avance_asc') return getScore(a) - getScore(b);
-                return 0;
-              });
-
-              return sortedPatients.map((p) => {
-                const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
-                const interviewPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
-                const reportPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
-                const age = (() => { const b = new Date(p.birth_date), t = new Date(); return t.getFullYear() - b.getFullYear(); })();
-
-                const nextAction = (() => {
-                  if (interviewPct < 100) return "Completar Entrevista";
-                  if (prog.studyCount === 0) return "Subir Estudios de Laboratorio";
-                  if (reportPct < 100) return "Generar Reporte Maestro";
-                  return "Revisar Expediente";
-                })();
-                const statusColor = interviewPct === 100 && prog.studyCount > 0 ? '#22c55e' : 'var(--gold-primary)';
+            filteredPatients.map((p) => {
+              const prog = progress[p.id] ?? { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 };
+              const interviewPct = Math.min(100, Math.round((prog.interviewCount / TOTAL_QUESTIONS) * 100));
+              const reportPct = Math.round(((prog.reportApproved * 2 + (prog.reportGenerated - prog.reportApproved)) / 10) * 100);
+              const age = (() => { const b = new Date(p.birth_date), t = new Date(); return t.getFullYear() - b.getFullYear(); })();
+              const nextAction = interviewPct < 100 ? 'Completar Entrevista' : prog.studyCount === 0 ? 'Subir Estudios de Laboratorio' : reportPct < 100 ? 'Generar Reporte Maestro' : 'Revisar Expediente';
+              const statusColor = interviewPct === 100 && prog.studyCount > 0 ? '#22c55e' : 'var(--gold-primary)';
 
               return (
                 <div key={p.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '20px', alignItems: 'center', padding: '16px 20px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', transition: 'border-color 0.2s' }}>
@@ -310,7 +303,6 @@ export default function Dashboard() {
                 </div>
               );
             })
-            })();
           )}
         </div>
       </section>
