@@ -28,8 +28,9 @@ interface Biomarker {
   name: string;
   value: string;
   unit: string;
-  referenceRange?: string;
-  flag: 'Normal' | 'Alto' | 'Bajo';
+  referenceRange?: string;   // from AI response
+  reference_range?: string;  // from Supabase (snake_case)
+  flag: string;
   system: string;
 }
 
@@ -516,20 +517,37 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                    {studies.map((s) => (
-                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${activeStudyId === s.id ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: activeStudyId === s.id ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
-                        <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 12px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', color: activeStudyId === s.id ? 'var(--gold-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-main)' }}>
-                          {new Date(s.created_at).toLocaleDateString('es-MX', { day:'2-digit', month:'short', year:'2-digit' })}
-                          {' · '}{s.file_name?.split('.')[0]?.slice(0,18)}
-                        </button>
-                        <button onClick={async () => {
-                          if (!confirm('¿Eliminar este estudio? Esta acción no se puede deshacer.')) return;
-                          await deleteStudy(s.id);
-                          if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
-                          await loadStudies();
-                        }} style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }} title="Eliminar estudio">×</button>
-                      </div>
-                    ))}
+                    {[...studies].sort((a, b) => {
+                      const da = new Date((a as any).exam_date ?? a.created_at).getTime();
+                      const db = new Date((b as any).exam_date ?? b.created_at).getTime();
+                      return db - da; // más recientes primero
+                    }).map((s) => {
+                      const examDate = (s as any).exam_date
+                        ? new Date((s as any).exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+                        : null;
+                      const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+                      const isActive = activeStudyId === s.id;
+                      return (
+                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
+                          <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}>
+                            {examDate ? (
+                              <>
+                                <span style={{ fontSize: '12px', fontWeight: 700, color: isActive ? 'var(--gold-primary)' : 'var(--text-primary)', display: 'block', lineHeight: 1.2 }}>📅 {examDate}</span>
+                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block' }}>subido {uploadDate}</span>
+                              </>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate} · {s.file_name?.split('.')[0]?.slice(0,15)}</span>
+                            )}
+                          </button>
+                          <button onClick={async () => {
+                            if (!confirm('¿Eliminar este estudio? Esta acción no se puede deshacer.')) return;
+                            await deleteStudy(s.id);
+                            if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
+                            await loadStudies();
+                          }} style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }} title="Eliminar estudio">×</button>
+                        </div>
+                      );
+                    })}
                   </div>
                   {mergeableDates.map(([date, group]) => (
                     <div key={date} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '8px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: '8px' }}>
@@ -602,45 +620,50 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             )}
           </section>
 
-          {/* Global Biomarker Cards — grouped by system */}
-          {analysisResult && studies.length > 0 && Object.entries(
-            studies[0]?.biomarkers?.reduce((acc, b) => { if (!acc[b.system]) acc[b.system] = []; acc[b.system].push(b); return acc; }, {} as Record<string, typeof studies[0]['biomarkers']>) ?? {}
-          ).map(([system, bms]) => (
-            <section key={system} style={styles.card}>
-              <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
-                {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
-              </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
-                {(bms ?? []).map((b, i) => {
-                  const elemId = `bm-study-${studies[0].id}-${b.name.replace(/\s+/g, '-')}`;
-                  const isGlowing = glowId === elemId;
-                  return (
-                    <div key={i} id={elemId} className={isGlowing ? 'pdi-glow-active' : ''} style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      padding: '12px 16px', borderRadius: '8px',
-                      border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.4)' : 'var(--border-subtle)'}`,
-                      background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.05)' : 'var(--bg-main)',
-                      transition: 'border-color 0.3s'
-                    }}>
-                      <div>
-                        <p style={{ margin: 0, fontSize: '13px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
-                        {(b as any).referenceRange && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {(b as any).referenceRange} {b.unit}</p>}
-                        {b.reference_range && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range} {b.unit}</p>}
+          {/* Global Biomarker Cards — grouped by system (uses most recent study) */}
+          {analysisResult && studies.length > 0 && (() => {
+            const activeBms: Biomarker[] = (studies.find(s => s.id === activeStudyId)?.biomarkers ?? studies[0]?.biomarkers ?? []) as Biomarker[];
+            const grouped = activeBms.reduce((acc: Record<string, Biomarker[]>, b) => {
+              if (!acc[b.system]) acc[b.system] = [];
+              acc[b.system].push(b);
+              return acc;
+            }, {});
+            return Object.entries(grouped).map(([system, bms]) => (
+              <section key={system} style={styles.card}>
+                <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
+                  {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+                  {bms.map((b, i) => {
+                    const elemId = `bm-study-${activeStudyId ?? studies[0].id}-${b.name.replace(/\s+/g, '-')}`;
+                    const isGlowing = glowId === elemId;
+                    return (
+                      <div key={i} id={elemId} className={isGlowing ? 'pdi-glow-active' : ''} style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '12px 16px', borderRadius: '8px',
+                        border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.4)' : 'var(--border-subtle)'}`,
+                        background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.05)' : 'var(--bg-main)',
+                        transition: 'border-color 0.3s'
+                      }}>
+                        <div>
+                          <p style={{ margin: 0, fontSize: '13px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
+                          {b.reference_range && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range} {b.unit}</p>}
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)' }}>
+                            {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
+                          </p>
+                          {b.flag !== 'Normal' && (
+                            <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>
+                          )}
+                        </div>
                       </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)' }}>
-                          {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
-                        </p>
-                        {b.flag !== 'Normal' && (
-                          <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
+                    );
+                  })}
+                </div>
+              </section>
+            ));
+          })()}
 
           {/* ── Evolución Clínica en el Tiempo ── */}
           {studies.length > 0 && <EvolutionCharts studies={studies} glowId={glowId} />}
