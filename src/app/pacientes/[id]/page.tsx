@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw } from 'lucide-react';
+import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2 } from 'lucide-react';
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 
@@ -65,6 +65,17 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   type MergeSnapshot = { target: any; sources: any[]; secondsLeft: number };
   const [mergeUndo, setMergeUndo] = useState<MergeSnapshot | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Chat Assistant State
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string}[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory, isChatOpen]);
 
   // Countdown for undo
   useEffect(() => {
@@ -164,6 +175,33 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     await loadStudies();
     setIsAnalyzing(false);
     setTimeout(() => setUploadQueue([]), 4000);
+  };
+
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || isChatLoading) return;
+    
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatHistory(prev => [...prev, { role: 'user', text: userMsg }]);
+    setIsChatLoading(true);
+
+    try {
+      const interviewAnswers = await getInterviewAnswers(id);
+      const res = await fetch('/api/patient/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient, studies, interviewAnswers, chatHistory, message: userMsg })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      
+      setChatHistory(prev => [...prev, { role: 'model', text: data.response }]);
+    } catch (err: any) {
+      alert("Error en el asistente: " + err.message);
+    } finally {
+      setIsChatLoading(false);
+    }
   };
 
 
@@ -554,6 +592,84 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           </section>
         </div>
       </div>
+
+      {/* Floating Chat Button */}
+      <button
+        onClick={() => setIsChatOpen(!isChatOpen)}
+        style={{
+          position: 'fixed', bottom: '40px', right: '40px',
+          width: '60px', height: '60px', borderRadius: '50%',
+          backgroundColor: 'var(--gold-primary)', border: 'none',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.3)', cursor: 'pointer',
+          display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 100
+        }}
+      >
+        {isChatOpen ? <X size={28} color="#000" /> : <Bot size={28} color="#000" />}
+      </button>
+
+      {/* Chat Window */}
+      {isChatOpen && (
+        <div style={{
+          position: 'fixed', bottom: '120px', right: '40px', width: '400px', height: '600px',
+          backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+          borderRadius: '16px', boxShadow: '0 12px 32px rgba(0,0,0,0.4)',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 100
+        }}>
+          {/* Header */}
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <Bot size={24} color="var(--gold-primary)" />
+            <div>
+              <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--text-primary)' }}>Asistente Clínico PDI</h3>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Análisis basado en el expediente de {patient.full_name}</span>
+            </div>
+          </div>
+          
+          {/* Messages */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {chatHistory.length === 0 && (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', marginTop: '20px' }}>
+                Hola, soy el asistente clínico. Conozco todos los estudios y respuestas de este paciente. ¿Qué deseas consultar?
+              </div>
+            )}
+            {chatHistory.map((msg, i) => (
+              <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
+                <div style={{
+                  padding: '12px 16px', borderRadius: '12px', fontSize: '13px', lineHeight: 1.5,
+                  backgroundColor: msg.role === 'user' ? 'var(--gold-primary)' : 'var(--bg-main)',
+                  color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
+                  borderBottomRightRadius: msg.role === 'user' ? '4px' : '12px',
+                  borderBottomLeftRadius: msg.role === 'model' ? '4px' : '12px',
+                }}>
+                  {msg.text.split('\n').map((line, j) => <p key={j} style={{ margin: '0 0 8px 0' }}>{line}</p>)}
+                </div>
+              </div>
+            ))}
+            {isChatLoading && (
+              <div style={{ alignSelf: 'flex-start', display: 'flex', gap: '8px', alignItems: 'center', padding: '12px', backgroundColor: 'var(--bg-main)', borderRadius: '12px', borderBottomLeftRadius: '4px' }}>
+                <Loader2 size={16} className="spin" color="var(--gold-primary)" />
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Analizando expediente...</span>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input */}
+          <form onSubmit={handleChatSubmit} style={{ padding: '16px', borderTop: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-main)', display: 'flex', gap: '12px' }}>
+            <input
+              type="text"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              placeholder="Haz una pregunta clínica..."
+              style={{ flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '8px', padding: '12px 16px', color: 'var(--text-primary)', fontSize: '13px', outline: 'none' }}
+              disabled={isChatLoading}
+            />
+            <button type="submit" disabled={isChatLoading || !chatInput.trim()} style={{ background: 'var(--gold-primary)', border: 'none', borderRadius: '8px', width: '44px', height: '44px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: (isChatLoading || !chatInput.trim()) ? 'not-allowed' : 'pointer', opacity: (isChatLoading || !chatInput.trim()) ? 0.5 : 1 }}>
+              <Send size={18} color="#000" />
+            </button>
+          </form>
+        </div>
+      )}
+
     </div>
   );
 }
