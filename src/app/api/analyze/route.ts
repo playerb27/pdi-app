@@ -28,13 +28,22 @@ Los VALORES DE REFERENCIA son rangos o categorías (Normal, Límite alto, Alto, 
 PASO 3 — Reglas de extracción:
 ✅ Extrae UNA entrada por marcador con el valor MEDIDO del paciente.
 ✅ Consolida toda la tabla de referencia de ese marcador en UN SOLO string de referencia legible (ej: "< 150 mg/dL", "74 - 106", "< 200 deseable").
+✅ El valor del paciente para cada marcador está en la MISMA LÍNEA que el nombre del marcador (o inmediatamente a su derecha en formato tabular).
+❌ IGNORA completamente las filas de conversión de unidades: líneas que contienen "FCSI", "Factor de conversión", "= X nmol/L", "= X pmol/L", "= X mmol/L" o similares. Estas NO son resultados — son conversiones matemáticas del laboratorio. NO las uses como valores ni como nombres de marcadores.
 ❌ No extraigas las filas de referencia (Normal, Límite alto, Alto, Muy alto, Mayor a, Menor a, Deseable, Óptimo) como si fueran marcadores individuales.
 ❌ No extraigas notas metodológicas (Método: Colorimétrico, Método: Cinética, etc.).
 ❌ No extraigas cálculos intermedios que no sean resultados clínicos relevantes (salvo que sean un marcador reconocido como BUN/Creatinina, Índice aterogénico, etc.).
+❌ NUNCA uses el valor de una fila FCSI o de conversión como el valor de un marcador.
+
+EJEMPLO DE FORMATO CON FCSI (común en laboratorios mexicanos):
+  TIROXINA LIBRE (FT4) EN SANGRE    0.98    ng/dL    0.70 - 1.48
+  FCSI = 12.87    12.61 nmol/L                              ← IGNORAR COMPLETAMENTE
+  HORMONA ESTIMULANTE (TSH)         5.276   µIU/mL   0.300 - 4.200
+→ FT4 = 0.98 ng/dL ✅ | TSH = 5.276 µIU/mL ✅ (nunca confundir entre sí)
 
 PASO 4 — Para cada biomarcador real extrae:
 - name: nombre clínico limpio del marcador
-- value: valor numérico exacto medido en el paciente
+- value: valor numérico exacto medido en el paciente (de la misma línea que el nombre)
 - unit: unidad de medida
 - referenceRange: resumen del rango de referencia en una sola expresión clara (ej: "74 - 106", "< 150", "< 200 deseable / 200-239 límite")
 - flag: "Normal", "Alto" o "Bajo" — determinado comparando el valor del paciente contra los rangos de referencia del documento
