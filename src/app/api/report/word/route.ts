@@ -3,9 +3,8 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { patient, modules } = await req.json();
-    const buffer = await generateWordReport(patient, modules);
-    // Convert Node Buffer → Uint8Array so NextResponse (BodyInit) accepts it
+    const { patient, modules, studies } = await req.json();
+    const buffer = await generateWordReport(patient, modules, studies ?? []);
     const body = new Uint8Array(buffer);
 
     return new NextResponse(body, {

@@ -75,19 +75,12 @@ Formato:
 
     const result = await model.generateContent([
       prompt,
-      {
-        inlineData: {
-          data: base64,
-          mimeType: mimeType
-        }
-      }
+      { inlineData: { data: base64, mimeType: mimeType } }
     ]);
 
     const text = result.response.text();
-    
-    let parsedData = null;
+    let parsedData: any = null;
     try {
-      // Limpiar markdown si la IA insiste en ponerlo
       const cleanText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
       parsedData = JSON.parse(cleanText);
     } catch (e) {
@@ -95,7 +88,50 @@ Formato:
       return NextResponse.json({ error: 'Error al interpretar la respuesta de la IA' }, { status: 500 });
     }
 
-    return NextResponse.json(parsedData);
+    // ── AI Audit: second pass to verify extraction quality ──────────────────
+    const auditPrompt = `Eres el auditor de calidad médica del sistema PDI. 
+Se te proporciona el documento de laboratorio original Y los datos que extrajo la IA.
+Tu tarea: comparar cada biomarcador extraído contra lo que aparece LITERALMENTE en el documento.
+
+DATOS EXTRAÍDOS:
+${JSON.stringify(parsedData.biomarkers, null, 2)}
+
+INSTRUCCIONES DE AUDITORÍA:
+1. Verifica que el VALOR de cada marcador coincida exactamente con el número en el documento
+2. Verifica que la UNIDAD sea correcta
+3. Verifica que el FLAG (Normal/Alto/Bajo) sea correcto según los rangos de referencia del documento
+4. Identifica marcadores importantes que puedan haber sido OMITIDOS
+5. Detecta si algún marcador tiene un nombre incorrecto o confundido
+
+Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown:
+{
+  "confidence": <número 0-100>,
+  "status": "<ok|warning|error>",
+  "issues": [
+    { "marker": "<nombre>", "type": "<wrong_value|wrong_flag|wrong_unit|wrong_name>", "extracted": "<valor extraído>", "note": "<descripción del problema>" }
+  ],
+  "missing_markers": ["<marcador omitido>"],
+  "summary": "<resumen ejecutivo de la auditoría en 1-2 oraciones>"
+}
+
+Criterios de status:
+- "ok": confidence >= 90 y 0 issues críticos
+- "warning": confidence 70-89 o 1-2 issues
+- "error": confidence < 70 o issues críticos de valores erróneos`;
+
+    let audit = { confidence: 100, status: 'ok', issues: [], missing_markers: [], summary: 'Auditoría no disponible' };
+    try {
+      const auditResult = await model.generateContent([
+        auditPrompt,
+        { inlineData: { data: base64, mimeType: mimeType } }
+      ]);
+      const auditText = auditResult.response.text().replace(/```json/gi, '').replace(/```/g, '').trim();
+      audit = JSON.parse(auditText);
+    } catch (e) {
+      console.warn('Audit failed silently:', e);
+    }
+
+    return NextResponse.json({ ...parsedData, audit });
 
   } catch (error: any) {
     console.error("AI Error:", error);

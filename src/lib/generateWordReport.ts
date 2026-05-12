@@ -1,9 +1,10 @@
 import {
   Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun,
   HeadingLevel, AlignmentType, BorderStyle, ShadingType, PageBreak,
-  Header, Footer, PageNumber, NumberFormat, WidthType, VerticalAlign,
+  ImageRun, Header, Footer, PageNumber, NumberFormat, WidthType, VerticalAlign,
   convertInchesToTwip,
 } from 'docx';
+import { normalizeBiomarkerName } from './biomarkers';
 
 // ─── Color palette ─────────────────────────────────────────────────────────────
 const C = {
@@ -367,10 +368,128 @@ function buildM2Tables(content: string): (Paragraph | Table)[] {
   return out;
 }
 
+// ─── Evolution charts via QuickChart.io ──────────────────────────────────────
+async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)[]> {
+  // Group biomarker values across studies by normalized name
+  const map = new Map<string, { date: string; value: number; unit: string; flag: string }[]>();
+
+  for (const study of studies) {
+    const dateLabel = study.exam_date
+      ? new Date(study.exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
+      : new Date(study.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+
+    for (const bm of (study.biomarkers ?? [])) {
+      const num = parseFloat(String(bm.value).replace(',', '.'));
+      if (isNaN(num)) continue;
+      const canonical = normalizeBiomarkerName(bm.name);
+      if (!map.has(canonical)) map.set(canonical, []);
+      map.get(canonical)!.push({ date: dateLabel, value: num, unit: bm.unit ?? '', flag: bm.flag ?? 'Normal' });
+    }
+  }
+
+  // Only markers with 2+ data points — prioritise altered ones
+  const series = [...map.entries()]
+    .filter(([, pts]) => pts.length >= 2)
+    .sort((a, b) => {
+      const aAlt = a[1].some(p => p.flag !== 'Normal') ? 0 : 1;
+      const bAlt = b[1].some(p => p.flag !== 'Normal') ? 0 : 1;
+      return aAlt - bAlt;
+    })
+    .slice(0, 12); // max 12 charts
+
+  if (!series.length) return [];
+
+  const out: (Paragraph | Table)[] = [
+    new Paragraph({
+      children: [run('EVOLUCIÓN CLÍNICA EN EL TIEMPO', { size: 26, bold: true, color: C.gray900 })],
+      spacing: { before: 480, after: 240 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: C.gold } },
+    }),
+    spacer(),
+  ];
+
+  // Render 2 charts per row
+  for (let i = 0; i < series.length; i += 2) {
+    const pair = series.slice(i, i + 2);
+    const cells: TableCell[] = [];
+
+    for (const [name, pts] of pair) {
+      const hasAlt = pts.some(p => p.flag !== 'Normal');
+      const lineColor = hasAlt ? 'dc2626' : '15803d';
+      const sortedPts = [...pts].sort((a, b) => a.date.localeCompare(b.date));
+
+      const chartCfg = {
+        type: 'line',
+        data: {
+          labels: sortedPts.map(p => p.date),
+          datasets: [{
+            label: name,
+            data: sortedPts.map(p => p.value),
+            borderColor: `#${lineColor}`,
+            backgroundColor: `#${lineColor}22`,
+            pointRadius: 5,
+            pointBackgroundColor: `#${lineColor}`,
+            tension: 0.3,
+            fill: true,
+          }],
+        },
+        options: {
+          plugins: { legend: { labels: { font: { size: 12 } } } },
+          scales: {
+            y: { ticks: { font: { size: 11 } } },
+            x: { ticks: { font: { size: 11 } } },
+          },
+        },
+      };
+
+      let imageData: Buffer | null = null;
+      try {
+        const url = `https://quickchart.io/chart?w=400&h=220&bkg=white&c=${encodeURIComponent(JSON.stringify(chartCfg))}`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (resp.ok) imageData = Buffer.from(await resp.arrayBuffer());
+      } catch { /* skip chart if fetch fails */ }
+
+      if (imageData) {
+        cells.push(new TableCell({
+          width: { size: 50, type: WidthType.PERCENTAGE },
+          borders: colorBorder(hasAlt ? C.red : C.green, 4),
+          margins: { top: 100, bottom: 100, left: 120, right: 120 },
+          children: [
+            new Paragraph({
+              children: [run(name, { bold: true, size: 20, color: hasAlt ? C.red : C.green })],
+              spacing: { before: 0, after: 80 },
+            }),
+            new Paragraph({
+              children: [new ImageRun({ data: imageData, transformation: { width: 300, height: 165 }, type: 'png' })],
+              spacing: { before: 0, after: 60 },
+            }),
+            new Paragraph({
+              children: [run(`${sortedPts.length} mediciones · ${sortedPts[0].unit}`, { size: 16, color: '9CA3AF', italics: true })],
+              spacing: { before: 0, after: 0 },
+            }),
+          ],
+        }));
+      }
+    }
+
+    if (cells.length) {
+      // Pad to 2 cells
+      while (cells.length < 2) {
+        cells.push(new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, borders: { ...noBorder() }, children: [spacer()] }));
+      }
+      out.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, borders: noBorder(), rows: [new TableRow({ children: cells })] }));
+      out.push(spacer());
+    }
+  }
+
+  return out;
+}
+
 // ─── Main generator ────────────────────────────────────────────────────────────
 export async function generateWordReport(
   patient: { full_name: string; birth_date?: string; gender?: string },
   modules: Record<number, { module_num: number; content: string; status: string }>,
+  studies: any[] = [],
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
   const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
@@ -396,6 +515,13 @@ export async function generateWordReport(
     if (num !== approvedNums[approvedNums.length - 1]) {
       children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
     }
+  }
+
+  // ── Evolution charts section (after all modules) ──────────────────────────
+  if (studies.length >= 2) {
+    children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
+    const charts = await buildEvolutionCharts(studies);
+    children.push(...charts);
   }
 
   const doc = new Document({

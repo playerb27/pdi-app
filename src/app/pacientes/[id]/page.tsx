@@ -263,13 +263,22 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         update('saving');
         const study = await createStudy(id, file.name, aiData.summary, aiData.exam_date ?? undefined);
         if (study) {
-          // Save hash for future duplicate detection
           await (async () => {
             const { supabase: sb } = await import('@/lib/supabase');
             await sb.from('studies').update({ file_hash: hash }).eq('id', study.id);
           })();
           await createBiomarkers(study.id, aiData.biomarkers);
-          update('done');
+
+          // Show audit result
+          const audit = aiData.audit;
+          if (audit) {
+            const icon = audit.status === 'ok' ? '✅' : audit.status === 'warning' ? '⚠️' : '🔴';
+            const label = audit.status === 'ok' ? 'Extracción verificada' : audit.status === 'warning' ? 'Revisar extracción' : 'Errores detectados';
+            const issuesText = audit.issues?.length ? ` · ${audit.issues.length} issue(s)` : '';
+            update('done', `${icon} ${label} · ${audit.confidence}% confianza${issuesText} — ${audit.summary}`);
+          } else {
+            update('done');
+          }
         }
         setAnalysisResult(aiData);
       } catch (err: any) {
@@ -279,7 +288,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
     await loadStudies();
     setIsAnalyzing(false);
-    setTimeout(() => setUploadQueue([]), 4000);
+    setTimeout(() => setUploadQueue([]), 8000);
   };
 
 
