@@ -33,12 +33,19 @@ export default function Dashboard() {
       return;
     }
     setBriefs(prev => ({ ...prev, [patientId]: { loading: true, text: null } }));
+    const p = patients.find(pat => pat.id === patientId);
     try {
       const res = await fetch('/api/patient/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           patientId,
+          patientBasicInfo: p ? {
+            full_name: p.full_name,
+            birth_date: p.birth_date,
+            gender: p.gender,
+            status: p.status,
+          } : undefined,
           message: 'Redacta un brief clínico ejecutivo de 2 párrafos cortos sobre este paciente. Incluye: quién es (edad, género, origen si se conoce), sus condiciones o síntomas más importantes, los valores de laboratorio más alterados, y qué espera del tratamiento. Usa un tono médico profesional y conciso. Si no hay suficiente información, indica qué falta.',
         }),
       });

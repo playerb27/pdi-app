@@ -11,18 +11,25 @@ const supabase = createClient(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    let { patient, studies, interviewAnswers, chatHistory, message, patientId } = body;
+    let { patient, studies, interviewAnswers, chatHistory, message, patientId, patientBasicInfo } = body;
 
-    // If only patientId was provided (e.g. from dashboard brief button), fetch everything
-    if (patientId && !patient) {
-      const { data: p } = await supabase.from('patients').select('*').eq('id', patientId).single();
-      patient = p;
+    // Option A: full patient object already passed (from patient profile page)
+    // Option B: only patientBasicInfo + patientId passed (from dashboard brief)
+    if (!patient && patientBasicInfo) {
+      patient = patientBasicInfo;
+    }
+
+    // If we have a patientId but no studies/answers, try fetching them
+    // (may be blocked by RLS without a session — fail gracefully)
+    if (patientId && (!studies || studies.length === 0)) {
       const { data: studiesData } = await supabase
         .from('studies')
         .select('*, biomarkers(*)')
         .eq('patient_id', patientId)
         .order('created_at', { ascending: false });
       studies = studiesData ?? [];
+    }
+    if (patientId && (!interviewAnswers || Object.keys(interviewAnswers ?? {}).length === 0)) {
       const { data: answers } = await supabase
         .from('interview_answers')
         .select('question_id, answer')
@@ -30,7 +37,7 @@ export async function POST(req: Request) {
       interviewAnswers = Object.fromEntries((answers ?? []).map((a: any) => [a.question_id, a.answer]));
     }
 
-    if (!patient) return NextResponse.json({ error: 'Paciente no encontrado' }, { status: 404 });
+    if (!patient) return NextResponse.json({ error: 'Datos del paciente no disponibles' }, { status: 400 });
     chatHistory = chatHistory ?? [];
     const age = (() => {
       if (!patient.birth_date) return '';
