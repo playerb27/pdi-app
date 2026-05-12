@@ -19,6 +19,7 @@ interface Props {
   compareMode?: boolean;
   selectedForCompare?: Set<string>;
   onToggleCompare?: (name: string) => void;
+  onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
 }
 
 const MASTER_INDEX: Record<string, string> = {
@@ -180,7 +181,7 @@ function BiomarkerSparkline({
   );
 }
 
-export default function EvolutionCharts({ studies, glowId, compareMode, selectedForCompare, onToggleCompare }: Props) {
+export default function EvolutionCharts({ studies, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
 
@@ -343,6 +344,9 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
         <ExpandedChartModal
           series={expandedSeries}
           onClose={() => setExpandedSeries(null)}
+          onValueUpdated={(biomarkerId, newValue, newFlag, studyId) => {
+            onBiomarkerUpdated?.(studyId, biomarkerId, newValue, newFlag);
+          }}
         />
       )}
     </>

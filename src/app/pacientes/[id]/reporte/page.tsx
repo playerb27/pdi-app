@@ -16,12 +16,12 @@ import { generatePrintHTML } from '@/lib/generatePrintHTML';
 
 // ─── Module definitions ───────────────────────────────────────────────────────
 const MODULE_DEFS = [
-  { num: 1, icon: '👤', title: 'Perfil Integral del Paciente', desc: 'Datos generales, antecedentes, medicamentos y perfil de riesgo familiar.', color: '#3b82f6' },
-  { num: 2, icon: '🔬', title: 'Análisis de Laboratorio por Sistemas', desc: 'Interpretación clínica de todos los biomarcadores agrupados por sistema.', color: '#8b5cf6' },
+  { num: 1, icon: '👤', title: 'Perfil Integral del Paciente', desc: 'Datos generales, antecedentes, medicamentos y perfil de riesgo familiar.', color: '#3b82f6', isComparative: false },
+  { num: 2, icon: '🔬', title: 'Análisis de Laboratorio por Sistemas', desc: 'Interpretación clínica de todos los biomarcadores agrupados por sistema.', color: '#8b5cf6', isComparative: false },
+  { num: 3, icon: '🩺', title: 'Evaluación Clínica Sistémica', desc: 'Correlación entre síntomas (entrevista) y hallazgos de laboratorio.', color: '#06b6d4', isComparative: false },
+  { num: 4, icon: '🧠', title: 'Diagnósticos Posibles y Correlaciones', desc: 'Diagnóstico diferencial, patrones multisistémicos y factores de riesgo.', color: '#f59e0b', isComparative: false },
+  { num: 5, icon: '📌', title: 'Plan de Intervención Integral', desc: 'Tratamiento, suplementación, estilo de vida, estudios adicionales y seguimiento.', color: '#22c55e', isComparative: false },
   { num: 6, icon: '📊', title: 'Gráficas Comparativas', desc: 'Gráficas de evolución comparativas seleccionadas desde el perfil del paciente.', color: '#d4af37', isComparative: true },
-  { num: 3, icon: '🩺', title: 'Evaluación Clínica Sistémica', desc: 'Correlación entre síntomas (entrevista) y hallazgos de laboratorio.', color: '#06b6d4' },
-  { num: 4, icon: '🧠', title: 'Diagnósticos Posibles y Correlaciones', desc: 'Diagnóstico diferencial, patrones multisistémicos y factores de riesgo.', color: '#f59e0b' },
-  { num: 5, icon: '📌', title: 'Plan de Intervención Integral', desc: 'Tratamiento, suplementación, estilo de vida, estudios adicionales y seguimiento.', color: '#22c55e' },
 ];
 
 // ─── Simple Markdown renderer ─────────────────────────────────────────────────
@@ -294,7 +294,22 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
 
                   {/* Actions */}
                   <div className="no-print" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-                    {isGenerating ? (
+                    {def.isComparative ? (
+                      /* Module 6: no AI generate — only expand chevron */
+                      <>
+                        {!hasContent && (
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            Agrega gráficas desde el perfil del paciente
+                          </span>
+                        )}
+                        {hasContent && (
+                          <button onClick={e => { e.stopPropagation(); setExpanded(isExpanded ? null : def.num); }}
+                            style={{ padding: '7px', borderRadius: '6px', border: '1px solid rgba(212,175,55,0.3)', background: 'transparent', color: 'var(--gold-primary)', cursor: 'pointer', display: 'flex' }}>
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </button>
+                        )}
+                      </>
+                    ) : isGenerating ? (
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--gold-primary)', fontSize: '12px' }}>
                         <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
                         Generando con IA...
@@ -307,7 +322,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                           </button>
                         )}
                         <button
-                          onClick={e => { e.stopPropagation(); if (!hasContent) generateModule(def.num); else generateModule(def.num); }}
+                          onClick={e => { e.stopPropagation(); generateModule(def.num); }}
                           disabled={!!needsApproval || !!needsApproval5}
                           title={needsApproval ? 'Aprueba primero módulos 1-3' : needsApproval5 ? 'Aprueba el módulo 4 primero' : ''}
                           style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: needsApproval || needsApproval5 ? 'var(--border-subtle)' : `${def.color}`, color: needsApproval || needsApproval5 ? 'var(--text-muted)' : '#fff', cursor: needsApproval || needsApproval5 ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}
@@ -343,53 +358,62 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 {/* Content area */}
                 {hasContent && isExpanded && !isGenerating && (
                   <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                    {/* Edit toolbar */}
-                    <div className="no-print" style={{ padding: '10px 24px', background: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)' }}>
-                      <button onClick={() => {
-                        setEditMode(prev => ({ ...prev, [def.num]: !isEditing }));
-                        if (!isEditing) setEditContent(prev => ({ ...prev, [def.num]: mod.content }));
-                      }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: isEditing ? 'rgba(212,175,55,0.1)' : 'transparent', color: isEditing ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
-                        {isEditing ? '👁 Ver preview' : '✏️ Editar'}
-                      </button>
-                      {isEditing && (
-                        <button onClick={() => saveEdit(def.num)} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          {saving[def.num] ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />} Guardar
-                        </button>
-                      )}
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                        Última edición: {new Date(mod.updated_at).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-
-                    {(() => {
-                      // Detect M2 JSON by presence of our schema key — more reliable than regex with backticks
-                      const isM2Json = def.num === 2 && mod.content.includes('"systems"');
-                      const viewContent = mod.content;
-                      const editVal = editContent[def.num] ?? mod.content;
-
-                      if (isEditing && isM2Json) return (
-                        <div style={{ background: '#0c0c14' }}>
-                          <Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} />
+                    {def.isComparative ? (
+                      /* Module 6: show marker chips */
+                      (() => {
+                        let markers: string[] = [];
+                        try { markers = JSON.parse(mod.content).markers ?? []; } catch {}
+                        return (
+                          <div style={{ padding: '24px 28px' }}>
+                            <p style={{ margin: '0 0 14px', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
+                              📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} comparativa{markers.length !== 1 ? 's' : ''} incluida{markers.length !== 1 ? 's' : ''}
+                            </p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                              {markers.map((m, i) => (
+                                <span key={i} style={{ padding: '6px 14px', borderRadius: '99px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', fontSize: '13px', fontWeight: 600 }}>
+                                  📈 {m}
+                                </span>
+                              ))}
+                            </div>
+                            <p style={{ margin: '16px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                              Estas gráficas se incluirán automáticamente en el Word al descargar el reporte.
+                            </p>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <>
+                        {/* Edit toolbar */}
+                        <div className="no-print" style={{ padding: '10px 24px', background: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)' }}>
+                          <button onClick={() => {
+                            setEditMode(prev => ({ ...prev, [def.num]: !isEditing }));
+                            if (!isEditing) setEditContent(prev => ({ ...prev, [def.num]: mod.content }));
+                          }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: isEditing ? 'rgba(212,175,55,0.1)' : 'transparent', color: isEditing ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                            {isEditing ? '👁 Ver preview' : '✏️ Editar'}
+                          </button>
+                          {isEditing && (
+                            <button onClick={() => saveEdit(def.num)} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {saving[def.num] ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />} Guardar
+                            </button>
+                          )}
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                            Última edición: {new Date(mod.updated_at).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </span>
                         </div>
-                      );
-                      if (isEditing) return (
-                        <textarea value={editVal}
-                          onChange={e => setEditContent(prev => ({ ...prev, [def.num]: e.target.value }))}
-                          style={{ width: '100%', minHeight: '400px', padding: '24px', background: 'var(--bg-main)', color: 'var(--text-primary)', border: 'none', outline: 'none', fontFamily: 'monospace', fontSize: '13px', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box' }}
-                        />
-                      );
-                      if (isM2Json) return (
-                        <div style={{ background: '#0a0a12' }}>
-                          <Module2Renderer content={viewContent} />
-                        </div>
-                      );
-                      return (
-                        <div style={{ padding: '28px 36px', lineHeight: 1.8, color: 'var(--text-secondary)', fontSize: '14px' }}
-                          dangerouslySetInnerHTML={{ __html: renderMarkdown(editVal) }} />
-                      );
-                    })()}
+                        {(() => {
+                          const isM2Json = def.num === 2 && mod.content.includes('"systems"');
+                          const viewContent = mod.content;
+                          const editVal = editContent[def.num] ?? mod.content;
+                          if (isEditing && isM2Json) return (<div style={{ background: '#0c0c14' }}><Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} /></div>);
+                          if (isEditing) return (<textarea value={editVal} onChange={e => setEditContent(prev => ({ ...prev, [def.num]: e.target.value }))} style={{ width: '100%', minHeight: '400px', padding: '24px', background: 'var(--bg-main)', color: 'var(--text-primary)', border: 'none', outline: 'none', fontFamily: 'monospace', fontSize: '13px', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box' }} />);
+                          if (isM2Json) return (<div style={{ background: '#0a0a12' }}><Module2Renderer content={viewContent} /></div>);
+                          return (<div style={{ padding: '28px 36px', lineHeight: 1.8, color: 'var(--text-secondary)', fontSize: '14px' }} dangerouslySetInnerHTML={{ __html: renderMarkdown(editVal) }} />);
+                        })()}
+                      </>
+                    )}
                   </div>
                 )}
+
               </div>
             );
           })}

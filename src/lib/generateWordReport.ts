@@ -492,7 +492,7 @@ export async function generateWordReport(
   studies: any[] = [],
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
-  const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
+  const approvedNums = [1, 2, 3, 4, 5, 6].filter(n => modules[n]?.status === 'approved');
 
   const children: (Paragraph | Table)[] = [
     ...buildCover(patient, approvedNums, dateStr),
@@ -502,12 +502,32 @@ export async function generateWordReport(
     const mod = modules[num];
     const color = MODULE_COLORS[num];
 
-    children.push(buildModuleHeader(num));
-    children.push(spacer(2));
-
-    if (num === 2 && mod.content.includes('"systems"')) {
+    if (num === 6) {
+      // Comparative charts module — render selected markers as QuickChart images
+      let selectedMarkers: string[] = [];
+      try { selectedMarkers = JSON.parse(mod.content).markers ?? []; } catch {}
+      if (selectedMarkers.length > 0) {
+        children.push(buildModuleHeader(6));
+        children.push(spacer(2));
+        const filteredStudies = studies.map(s => ({
+          ...s,
+          biomarkers: (s.biomarkers ?? []).filter((b: any) => {
+            const cn = normalizeBiomarkerName(b.name);
+            return selectedMarkers.includes(cn);
+          }),
+        })).filter(s => s.biomarkers.length > 0);
+        if (filteredStudies.length > 0) {
+          const cmpCharts = await buildEvolutionCharts(filteredStudies);
+          children.push(...cmpCharts);
+        }
+      }
+    } else if (num === 2 && mod.content.includes('"systems"')) {
+      children.push(buildModuleHeader(num));
+      children.push(spacer(2));
       children.push(...buildM2Tables(mod.content));
     } else {
+      children.push(buildModuleHeader(num));
+      children.push(spacer(2));
       children.push(...mdToParagraphs(mod.content));
     }
 
@@ -517,7 +537,7 @@ export async function generateWordReport(
     }
   }
 
-  // ── Evolution charts section (after all modules) ──────────────────────────
+  // ── Evolution charts section (all studies, after all modules) ─────────────
   if (studies.length >= 2) {
     children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
     const charts = await buildEvolutionCharts(studies);

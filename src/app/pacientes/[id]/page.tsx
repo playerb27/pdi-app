@@ -898,6 +898,14 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               compareMode={isCompareMode}
               selectedForCompare={selectedForCompare}
               onToggleCompare={toggleSelectForCompare}
+              onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
+                setStudies(prev => prev.map(s => s.id !== studyId ? s : {
+                  ...s,
+                  biomarkers: (s.biomarkers as any[]).map(b =>
+                    (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: b.value }
+                  ),
+                }));
+              }}
             />
           )}
 
