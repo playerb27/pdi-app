@@ -812,7 +812,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <p style={{ margin: 0, fontSize: '13px', color: isAlt ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
-                            {b.is_edited && <Edit2 size={10} color="var(--gold-primary)" title={`Original: ${b.original_value}`} />}
+                            {!!b.is_edited && <span title={`Editado · Original IA: ${b.original_value ?? ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}><Edit2 size={10} color="var(--gold-primary)" /></span>}
                           </div>
                           {(b.reference_range || b.referenceRange) && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range ?? b.referenceRange} {b.unit}</p>}
                         </div>
