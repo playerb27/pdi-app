@@ -131,6 +131,21 @@ export async function deleteStudy(studyId: string): Promise<boolean> {
   return true;
 }
 
+export async function updateBiomarker(
+  biomarkerId: string,
+  updates: { value: string; flag: string; originalValue?: string }
+): Promise<boolean> {
+  const payload: Record<string, string | boolean> = {
+    value: updates.value,
+    flag: updates.flag,
+    is_edited: true,
+  };
+  if (updates.originalValue !== undefined) payload.original_value = updates.originalValue;
+  const { error } = await supabase.from('biomarkers').update(payload).eq('id', biomarkerId);
+  if (error) { console.error("Error updating biomarker:", error.message); return false; }
+  return true;
+}
+
 // ─── Interview / Questionnaire ────────────────────────────────────────────────
 
 export async function upsertInterviewAnswer(

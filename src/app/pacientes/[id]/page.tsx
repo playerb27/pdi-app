@@ -2,7 +2,7 @@
 import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2 } from 'lucide-react';
-import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
+import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
 import { studyBiomarkerElementId, chartBiomarkerElementId, normalizeBiomarkerName } from '@/lib/biomarkers';
@@ -26,6 +26,7 @@ const MASTER_INDEX = [
 ];
 
 interface Biomarker {
+  id?: string;               // Supabase row id (for editing)
   name: string;
   value: string;
   unit: string;
@@ -33,6 +34,8 @@ interface Biomarker {
   reference_range?: string;  // from Supabase (snake_case)
   flag: string;
   system: string;
+  is_edited?: boolean;       // marked when manually corrected
+  original_value?: string;   // preserved original AI value
 }
 
 export default function PatientProfile({ params }: { params: Promise<{ id: string }> }) {
@@ -81,6 +84,36 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [glowId, setGlowId] = useState<string | null>(null);
+
+  // Biomarker inline edit state
+  const [editBm, setEditBm] = useState<{ bm: Biomarker; studyId: string } | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [editFlag, setEditFlag] = useState('');
+  const [isSavingBm, setIsSavingBm] = useState(false);
+
+  const handleSaveBiomarker = async () => {
+    if (!editBm?.bm.id) return;
+    setIsSavingBm(true);
+    const originalValue = editBm.bm.is_edited ? editBm.bm.original_value : editBm.bm.value;
+    await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag, originalValue });
+    // Update local state
+    setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
+      ...s,
+      biomarkers: (s.biomarkers as Biomarker[]).map(b =>
+        b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: originalValue }
+      )
+    }));
+    if (analysisResult) {
+      setAnalysisResult(prev => prev ? {
+        ...prev,
+        biomarkers: prev.biomarkers.map(b =>
+          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: originalValue }
+        )
+      } : prev);
+    }
+    setIsSavingBm(false);
+    setEditBm(null);
+  };
 
   // Cargar historial guardado al entrar al perfil del paciente
   useEffect(() => {
@@ -399,6 +432,53 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         </div>
       )}
 
+      {/* ── Biomarker Edit Modal ── */}
+      {editBm && (
+        <div style={styles.modalOverlay} onClick={() => setEditBm(null)}>
+          <div style={{ ...styles.modalContent, maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ ...styles.sectionTitle, fontSize: '16px' }}>Editar Biomarcador</h2>
+                <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{editBm.bm.name}</p>
+              </div>
+              <button onClick={() => setEditBm(null)} style={styles.iconBtn}><X size={20} /></button>
+            </div>
+            {editBm.bm.is_edited && (
+              <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', marginBottom: '16px' }}>
+                <p style={{ margin: 0, fontSize: '11px', color: 'var(--gold-primary)' }}>
+                  ✏️ Valor original de la IA: <strong>{editBm.bm.original_value}</strong>
+                </p>
+              </div>
+            )}
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Valor</label>
+              <input type="text" style={styles.input} value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="Ej: 5.276" autoFocus />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: 36 }}>Flag</span>
+              {(['Normal', 'Alto', 'Bajo'] as const).map(f => (
+                <button key={f} onClick={() => setEditFlag(f)} style={{
+                  flex: 1, padding: '8px', borderRadius: '8px',
+                  border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--border-subtle)'}`,
+                  background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)') : 'transparent',
+                  color: editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--text-muted)',
+                  cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '12px', fontWeight: 600, transition: 'all 0.15s',
+                }}>{f}</button>
+              ))}
+            </div>
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 20px' }}>
+              Ref: {editBm.bm.reference_range ?? editBm.bm.referenceRange ?? 'N/D'} {editBm.bm.unit}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={() => setEditBm(null)} style={styles.cancelBtn}>Cancelar</button>
+              <button onClick={handleSaveBiomarker} disabled={isSavingBm || !editBm.bm.id} className="btn-primary" style={{ padding: '10px 24px', opacity: isSavingBm ? 0.7 : 1 }}>
+                {isSavingBm ? 'Guardando...' : !editBm.bm.id ? 'Sin ID' : 'Guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Header ── */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 48px', flexShrink: 0, borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -712,25 +792,35 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   {bms.map((b, i) => {
                     const elemId = `bm-study-${activeStudyId ?? studies[0].id}-${b.name.replace(/\s+/g, '-')}`;
                     const isGlowing = glowId === elemId;
+                    const isAlt = b.flag !== 'Normal';
                     return (
-                      <div key={i} id={elemId} className={isGlowing ? 'pdi-glow-active' : ''} style={{
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        padding: '12px 16px', borderRadius: '8px',
-                        border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.4)' : 'var(--border-subtle)'}`,
-                        background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.05)' : 'var(--bg-main)',
-                        transition: 'border-color 0.3s'
-                      }}>
-                        <div>
-                          <p style={{ margin: 0, fontSize: '13px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
-                          {b.reference_range && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range} {b.unit}</p>}
+                      <div
+                        key={i} id={elemId}
+                        className={isGlowing ? 'pdi-glow-active' : ''}
+                        onClick={() => { setEditBm({ bm: b, studyId: activeStudyId ?? studies[0].id }); setEditValue(b.value); setEditFlag(b.flag); }}
+                        title="Clic para editar este valor"
+                        style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          padding: '12px 16px', borderRadius: '8px', cursor: 'pointer',
+                          border: `1px solid ${isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}`,
+                          background: isAlt ? 'rgba(239,68,68,0.05)' : b.is_edited ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.7)' : 'rgba(212,175,55,0.5)'}
+                        onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <p style={{ margin: 0, fontSize: '13px', color: isAlt ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
+                            {b.is_edited && <Edit2 size={10} color="var(--gold-primary)" title={`Original: ${b.original_value}`} />}
+                          </div>
+                          {(b.reference_range || b.referenceRange) && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range ?? b.referenceRange} {b.unit}</p>}
                         </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)' }}>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: isAlt ? '#ef4444' : b.is_edited ? 'var(--gold-primary)' : 'var(--text-primary)' }}>
                             {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
                           </p>
-                          {b.flag !== 'Normal' && (
-                            <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>
-                          )}
+                          {isAlt && <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>}
                         </div>
                       </div>
                     );
