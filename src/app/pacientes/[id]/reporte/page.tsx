@@ -16,36 +16,12 @@ import { generatePrintHTML } from '@/lib/generatePrintHTML';
 
 // ─── Module definitions ───────────────────────────────────────────────────────
 const MODULE_DEFS = [
-  {
-    num: 1, icon: '👤',
-    title: 'Perfil Integral del Paciente',
-    desc: 'Datos generales, antecedentes, medicamentos y perfil de riesgo familiar.',
-    color: '#3b82f6',
-  },
-  {
-    num: 2, icon: '🔬',
-    title: 'Análisis de Laboratorio por Sistemas',
-    desc: 'Interpretación clínica de todos los biomarcadores agrupados por sistema.',
-    color: '#8b5cf6',
-  },
-  {
-    num: 3, icon: '🩺',
-    title: 'Evaluación Clínica Sistémica',
-    desc: 'Correlación entre síntomas (entrevista) y hallazgos de laboratorio.',
-    color: '#06b6d4',
-  },
-  {
-    num: 4, icon: '🧠',
-    title: 'Diagnósticos Posibles y Correlaciones',
-    desc: 'Diagnóstico diferencial, patrones multisistémicos y factores de riesgo.',
-    color: '#f59e0b',
-  },
-  {
-    num: 5, icon: '📌',
-    title: 'Plan de Intervención Integral',
-    desc: 'Tratamiento, suplementación, estilo de vida, estudios adicionales y seguimiento.',
-    color: '#22c55e',
-  },
+  { num: 1, icon: '👤', title: 'Perfil Integral del Paciente', desc: 'Datos generales, antecedentes, medicamentos y perfil de riesgo familiar.', color: '#3b82f6' },
+  { num: 2, icon: '🔬', title: 'Análisis de Laboratorio por Sistemas', desc: 'Interpretación clínica de todos los biomarcadores agrupados por sistema.', color: '#8b5cf6' },
+  { num: 6, icon: '📊', title: 'Gráficas Comparativas', desc: 'Gráficas de evolución comparativas seleccionadas desde el perfil del paciente.', color: '#d4af37', isComparative: true },
+  { num: 3, icon: '🩺', title: 'Evaluación Clínica Sistémica', desc: 'Correlación entre síntomas (entrevista) y hallazgos de laboratorio.', color: '#06b6d4' },
+  { num: 4, icon: '🧠', title: 'Diagnósticos Posibles y Correlaciones', desc: 'Diagnóstico diferencial, patrones multisistémicos y factores de riesgo.', color: '#f59e0b' },
+  { num: 5, icon: '📌', title: 'Plan de Intervención Integral', desc: 'Tratamiento, suplementación, estilo de vida, estudios adicionales y seguimiento.', color: '#22c55e' },
 ];
 
 // ─── Simple Markdown renderer ─────────────────────────────────────────────────
@@ -200,7 +176,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   };
 
   const approvedCount = Object.values(modules).filter(m => m.status === 'approved').length;
-  const allApproved = approvedCount === 5;
+  // Module 6 (Comparative Charts) is optional — allApproved only needs 1-5
+  const allApproved = [1,2,3,4,5].every(n => modules[n]?.status === 'approved');
 
   if (!patient) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

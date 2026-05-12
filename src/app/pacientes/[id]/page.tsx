@@ -1,10 +1,11 @@
 'use client';
 import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2 } from 'lucide-react';
-import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, Patient, Study } from '@/lib/api';
+import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare } from 'lucide-react';
+import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, upsertReportModule, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
+import ComparativeModal from '@/components/ComparativeModal';
 import { studyBiomarkerElementId, chartBiomarkerElementId, normalizeBiomarkerName } from '@/lib/biomarkers';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
@@ -84,6 +85,32 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [glowId, setGlowId] = useState<string | null>(null);
+
+  // Compare mode state
+  const [isCompareMode, setIsCompareMode] = useState(false);
+  const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set());
+  const [showComparativeModal, setShowComparativeModal] = useState(false);
+  const [addedToReport, setAddedToReport] = useState(false);
+
+  const toggleCompareMode = () => {
+    setIsCompareMode(prev => !prev);
+    setSelectedForCompare(new Set());
+    setShowComparativeModal(false);
+    setAddedToReport(false);
+  };
+
+  const toggleSelectForCompare = (name: string) => {
+    setSelectedForCompare(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
+  const handleAddToReport = async (names: string[]) => {
+    await upsertReportModule(id, 6, 'Gráficas Comparativas', JSON.stringify({ type: 'comparative', markers: names }), 'approved');
+    setAddedToReport(true);
+  };
 
   // Biomarker inline edit state
   const [editBm, setEditBm] = useState<{ bm: Biomarker; studyId: string } | null>(null);
@@ -519,9 +546,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             </div>
           </div>
         )}
-        {/* Action Buttons row — Buscar + Entrevista + Reporte */}
+        {/* Action Buttons row — Buscar + Comparativa + Entrevista + Reporte */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch' }}>
-          {/* Buscar marcador — mismo estilo que los demás */}
+          {/* Buscar marcador */}
           <button onClick={() => setIsSearchOpen(true)} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '6px', padding: '12px 20px', borderRadius: '12px', border: '1px solid var(--border-subtle)', background: 'rgba(255,255,255,0.03)', color: 'var(--text-muted)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '140px', transition: 'background 0.2s, border-color 0.2s' }}
             onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.07)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(212,175,55,0.4)'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(255,255,255,0.03)'; (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--border-subtle)'; }}
@@ -529,6 +556,30 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             <span style={{ fontSize: '22px' }}>🔍</span>
             <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', lineHeight: 1.3, textAlign: 'center' }}>Buscar<br/>Marcador</span>
           </button>
+
+          {/* Comparativa button */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', minWidth: '150px' }}>
+            <button
+              onClick={toggleCompareMode}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '4px', padding: '10px 16px', borderRadius: '12px', border: `1px solid ${isCompareMode ? 'rgba(212,175,55,0.6)' : 'var(--border-subtle)'}`, background: isCompareMode ? 'rgba(212,175,55,0.1)' : 'rgba(255,255,255,0.03)', color: isCompareMode ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontFamily: 'var(--font-main)', transition: 'all 0.2s', position: 'relative' }}
+            >
+              <GitCompare size={20} />
+              <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', lineHeight: 1.3, textAlign: 'center' }}>Comparativa</span>
+              {selectedForCompare.size > 0 && (
+                <span style={{ position: 'absolute', top: '6px', right: '6px', background: 'var(--gold-primary)', color: '#000', fontSize: '10px', fontWeight: 800, borderRadius: '99px', padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                  {selectedForCompare.size}
+                </span>
+              )}
+            </button>
+            {isCompareMode && selectedForCompare.size > 0 && (
+              <button
+                onClick={() => setShowComparativeModal(true)}
+                style={{ padding: '7px 12px', borderRadius: '10px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '11px', fontWeight: 800, textAlign: 'center', transition: 'all 0.2s', boxShadow: '0 4px 12px rgba(212,175,55,0.35)' }}
+              >
+                Comparar ({selectedForCompare.size})
+              </button>
+            )}
+          </div>
           <button onClick={() => router.push(`/pacientes/${id}/entrevista`)} style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '10px', padding: '12px 20px', borderRadius: '12px', border: '1px solid rgba(212,175,55,0.5)', background: 'rgba(212,175,55,0.06)', color: 'var(--gold-primary)', cursor: 'pointer', fontFamily: 'var(--font-main)', minWidth: '190px', transition: 'background 0.2s' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', gap: '16px' }}>
               <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.75, lineHeight: 1.3 }}>📋 Entrevista<br/>Clínica</span>
@@ -840,7 +891,41 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           })()}
 
           {/* ── Evolución Clínica en el Tiempo ── */}
-          {studies.length > 0 && <EvolutionCharts studies={studies} glowId={glowId} />}
+          {studies.length > 0 && (
+            <EvolutionCharts
+              studies={studies}
+              glowId={glowId}
+              compareMode={isCompareMode}
+              selectedForCompare={selectedForCompare}
+              onToggleCompare={toggleSelectForCompare}
+            />
+          )}
+
+          {/* ── Comparative Modal ── */}
+          {showComparativeModal && selectedForCompare.size > 0 && (() => {
+            // Build series for selected markers from all studies
+            const seriesMap: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }> = {};
+            const getStudyDate = (s: any) => { const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null; return s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at); };
+            const sorted = [...studies].sort((a, b) => new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime());
+            for (const study of sorted) {
+              for (const bm of (study.biomarkers ?? [])) {
+                const num = parseFloat(bm.value); if (isNaN(num)) continue;
+                const cn = normalizeBiomarkerName(bm.name);
+                if (!selectedForCompare.has(cn)) continue;
+                if (!seriesMap[cn]) seriesMap[cn] = { name: cn, unit: bm.unit, referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range, points: [] };
+                seriesMap[cn].points.push({ date: getStudyDate(study), value: num, flag: bm.flag, biomarkerId: (bm as any).id, studyId: study.id });
+              }
+            }
+            const selectedSeries = [...selectedForCompare].map(n => seriesMap[n]).filter(Boolean);
+            return (
+              <ComparativeModal
+                series={selectedSeries}
+                onClose={() => setShowComparativeModal(false)}
+                onAddToReport={handleAddToReport}
+                addedToReport={addedToReport}
+              />
+            );
+          })()}
 
           {/* ── Historial de Consultas al Asistente ── */}
           {chatHistory.length > 0 && (
