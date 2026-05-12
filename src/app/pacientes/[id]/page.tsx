@@ -152,6 +152,25 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     else alert('Error al actualizar: ' + error);
   };
 
+  // ─── Duplicate detection helpers ─────────────────────────────────────────────
+  const sha256 = async (file: File): Promise<string> => {
+    const buf = await file.arrayBuffer();
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const isBiomarkerDuplicate = (
+    aiMarkers: { name: string; value: string }[],
+    existingStudy: Study
+  ): boolean => {
+    const existing = (existingStudy.biomarkers ?? []) as { name: string; value: string }[];
+    if (existing.length === 0) return false;
+    const matches = aiMarkers.filter(bm =>
+      existing.some(e => e.name === bm.name && e.value === bm.value)
+    );
+    return matches.length >= Math.min(5, Math.floor(aiMarkers.length * 0.4));
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
@@ -167,6 +186,16 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
       try {
         update('reading');
+
+        // ── Layer 1: SHA-256 hash check (exact duplicate) ──────────────────────
+        const hash = await sha256(file);
+        const hashDuplicate = studies.find(s => (s as any).file_hash === hash);
+        if (hashDuplicate) {
+          const dateLabel = (hashDuplicate as any).exam_date ?? hashDuplicate.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? hashDuplicate.created_at?.slice(0, 10);
+          update('error', `⚠️ Archivo idéntico ya subido (${dateLabel}). Sube una versión diferente.`);
+          continue;
+        }
+
         const base64 = await new Promise<string>((resolve, reject) => {
           const r = new FileReader();
           r.onloadend = () => resolve((r.result as string).split(',')[1]);
@@ -183,10 +212,29 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         const aiData = await res.json();
         if (!res.ok) { update('error', aiData.error); continue; }
 
+        // ── Layer 2: Semantic duplicate (same exam date + similar biomarkers) ──
+        const examDate = aiData.exam_date ?? file.name.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+        if (examDate) {
+          const sameDateStudy = studies.find(s => {
+            const sd = (s as any).exam_date ?? s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+            return sd === examDate;
+          });
+          if (sameDateStudy && isBiomarkerDuplicate(aiData.biomarkers ?? [], sameDateStudy)) {
+            const proceed = confirm(
+              `⚠️ Posible duplicado detectado\n\nYa existe un estudio del ${examDate} con biomarcadores muy similares.\n\n¿Deseas subirlo de todas formas?`
+            );
+            if (!proceed) { update('error', 'Cancelado por duplicado detectado'); continue; }
+          }
+        }
+
         update('saving');
-        // Always create a separate study — user can manually merge afterwards
         const study = await createStudy(id, file.name, aiData.summary, aiData.exam_date ?? undefined);
         if (study) {
+          // Save hash for future duplicate detection
+          await (async () => {
+            const { supabase: sb } = await import('@/lib/supabase');
+            await sb.from('studies').update({ file_hash: hash }).eq('id', study.id);
+          })();
           await createBiomarkers(study.id, aiData.biomarkers);
           update('done');
         }
@@ -200,6 +248,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     setIsAnalyzing(false);
     setTimeout(() => setUploadQueue([]), 4000);
   };
+
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
