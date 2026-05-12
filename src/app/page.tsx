@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { Plus, Search, X, Lock, Mail, Zap } from 'lucide-react';
-import { getPatients, createPatient, getPatientProgressBatch, Patient } from '@/lib/api';
+import { getPatients, createPatient, getPatientProgressBatch, getStudiesWithBiomarkers, getInterviewAnswers, Patient } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import { supabase } from '@/lib/supabase';
 
@@ -33,24 +33,25 @@ export default function Dashboard() {
       return;
     }
     setBriefs(prev => ({ ...prev, [patientId]: { loading: true, text: null } }));
-    const p = patients.find(pat => pat.id === patientId);
-    // Get the current user's JWT so the API can make authenticated Supabase queries
-    const { data: { session: currentSession } } = await supabase.auth.getSession();
-    const authToken = currentSession?.access_token;
+    const patientData = patients.find(pat => pat.id === patientId);
     try {
+      // Fetch everything client-side (client is authenticated — no RLS issues)
+      const [studies, rawAnswers] = await Promise.all([
+        getStudiesWithBiomarkers(patientId),
+        getInterviewAnswers(patientId),
+      ]);
+      const interviewAnswers = Object.fromEntries(
+        rawAnswers.map((a: any) => [a.question_id ?? a.question ?? a.id, a.answer])
+      );
       const res = await fetch('/api/patient/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          patientId,
-          authToken,
-          patientBasicInfo: p ? {
-            full_name: p.full_name,
-            birth_date: p.birth_date,
-            gender: p.gender,
-            status: p.status,
-          } : undefined,
-          message: 'Redacta un brief clínico ejecutivo de 2 párrafos cortos sobre este paciente. Incluye: quién es (edad, género, origen si se conoce), sus condiciones o síntomas más importantes, los valores de laboratorio más alterados, y qué espera del tratamiento. Usa un tono médico profesional y conciso. Si no hay suficiente información, indica qué falta.',
+          patient: patientData,
+          studies,
+          interviewAnswers,
+          chatHistory: [],
+          message: 'Redacta un brief clínico ejecutivo de 2 párrafos cortos sobre este paciente. Incluye: quién es (edad, género, origen si se menciona), sus condiciones o síntomas más importantes, los valores de laboratorio más relevantes (alterados primero), y qué espera del tratamiento. Tono médico profesional y conciso.',
         }),
       });
       const data = await res.json();

@@ -1,46 +1,14 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    let { patient, studies, interviewAnswers, chatHistory, message, patientId, patientBasicInfo, authToken } = body;
+    const { patient, studies, interviewAnswers, chatHistory, message } = await req.json();
 
-    // Create an authenticated Supabase client if token provided (bypasses RLS)
-    const db = authToken
-      ? createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          { global: { headers: { Authorization: `Bearer ${authToken}` } } }
-        )
-      : createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+    if (!patient) return NextResponse.json({ error: 'Datos del paciente requeridos' }, { status: 400 });
 
-    // Option A: full patient object already passed (from patient profile page)
-    // Option B: patientBasicInfo + patientId passed (from dashboard brief)
-    if (!patient && patientBasicInfo) patient = patientBasicInfo;
-
-    // Fetch studies and interview answers using authenticated client
-    if (patientId && (!studies || studies.length === 0)) {
-      const { data: studiesData } = await db
-        .from('studies')
-        .select('*, biomarkers(*)')
-        .eq('patient_id', patientId)
-        .order('created_at', { ascending: false });
-      studies = studiesData ?? [];
-    }
-    if (patientId && (!interviewAnswers || Object.keys(interviewAnswers ?? {}).length === 0)) {
-      const { data: answers } = await db
-        .from('interview_answers')
-        .select('question_id, answer')
-        .eq('patient_id', patientId);
-      interviewAnswers = Object.fromEntries((answers ?? []).map((a: any) => [a.question_id, a.answer]));
-    }
-
-    if (!patient) return NextResponse.json({ error: 'Datos del paciente no disponibles' }, { status: 400 });
-    chatHistory = chatHistory ?? [];
     const age = (() => {
       if (!patient.birth_date) return '';
       const today = new Date();
@@ -67,26 +35,26 @@ DATOS DEL PACIENTE:
 - Nombre: ${patient.full_name}
 - Edad: ${age}
 - Sexo: ${patient.gender === 'male' ? 'Masculino' : 'Femenino'}
-- Estado actual: ${patient.status}
 
 `;
 
     if (studies && studies.length > 0) {
       contextStr += `ESTUDIOS Y BIOMARCADORES:\n`;
       studies.forEach((study: any) => {
-        contextStr += `- Estudio: ${study.name}\n`;
+        const dateLabel = study.exam_date ?? study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? study.created_at?.slice(0, 10);
+        contextStr += `- Estudio (${dateLabel}):\n`;
         const altered = study.biomarkers?.filter((b: any) => b.flag !== 'Normal') || [];
         if (altered.length > 0) {
           contextStr += `  Biomarcadores alterados:\n`;
           altered.forEach((b: any) => {
-            contextStr += `    * ${b.name}: ${b.value} ${b.unit} (${b.flag}) [Ref: ${b.referenceRange ?? 'N/D'}]\n`;
+            contextStr += `    * ${b.name}: ${b.value} ${b.unit} (${b.flag}) [Ref: ${b.referenceRange ?? b.reference_range ?? 'N/D'}]\n`;
           });
         }
         const normal = study.biomarkers?.filter((b: any) => b.flag === 'Normal') || [];
         if (normal.length > 0) {
-          contextStr += `  Biomarcadores normales clave:\n`;
+          contextStr += `  Biomarcadores normales:\n`;
           normal.slice(0, 15).forEach((b: any) => {
-             contextStr += `    * ${b.name}: ${b.value} ${b.unit}\n`;
+            contextStr += `    * ${b.name}: ${b.value} ${b.unit}\n`;
           });
         }
       });
@@ -103,22 +71,19 @@ DATOS DEL PACIENTE:
 
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
-    // Initialize chat session with history and system instruction context
     const chat = model.startChat({
       history: [
-        { role: 'user', parts: [{ text: contextStr + "\n\nEntendido. Ahora responderé únicamente basándome en este perfil clínico." }] },
-        { role: 'model', parts: [{ text: "Comprendido. Actuaré como el Asistente Clínico Experto para analizar y opinar sobre este paciente basado estrictamente en sus datos. Estoy listo para tus preguntas." }] },
-        ...chatHistory.map((h: any) => ({
-          role: h.role, // 'user' or 'model'
+        { role: 'user', parts: [{ text: contextStr + '\n\nEntendido. Ahora responderé únicamente basándome en este perfil clínico.' }] },
+        { role: 'model', parts: [{ text: 'Comprendido. Actuaré como el Asistente Clínico Experto para analizar y opinar sobre este paciente basado estrictamente en sus datos. Estoy listo para tus preguntas.' }] },
+        ...(chatHistory ?? []).map((h: any) => ({
+          role: h.role,
           parts: [{ text: h.text }]
         }))
       ]
     });
 
     const result = await chat.sendMessage(message);
-    const responseText = result.response.text();
-
-    return NextResponse.json({ response: responseText });
+    return NextResponse.json({ response: result.response.text() });
 
   } catch (error: any) {
     console.error('AI Chat Error:', error);
