@@ -36,13 +36,10 @@ export default function Dashboard() {
     const patientData = patients.find(pat => pat.id === patientId);
     try {
       // Fetch everything client-side (client is authenticated — no RLS issues)
-      const [studies, rawAnswers] = await Promise.all([
+      const [studies, interviewAnswers] = await Promise.all([
         getStudiesWithBiomarkers(patientId),
         getInterviewAnswers(patientId),
       ]);
-      const interviewAnswers = Object.fromEntries(
-        rawAnswers.map((a: any) => [a.question_id ?? a.question ?? a.id, a.answer])
-      );
       const res = await fetch('/api/patient/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
