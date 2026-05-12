@@ -34,12 +34,16 @@ export default function Dashboard() {
     }
     setBriefs(prev => ({ ...prev, [patientId]: { loading: true, text: null } }));
     const p = patients.find(pat => pat.id === patientId);
+    // Get the current user's JWT so the API can make authenticated Supabase queries
+    const { data: { session: currentSession } } = await supabase.auth.getSession();
+    const authToken = currentSession?.access_token;
     try {
       const res = await fetch('/api/patient/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           patientId,
+          authToken,
           patientBasicInfo: p ? {
             full_name: p.full_name,
             birth_date: p.birth_date,

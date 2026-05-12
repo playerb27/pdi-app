@@ -3,26 +3,28 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    let { patient, studies, interviewAnswers, chatHistory, message, patientId, patientBasicInfo } = body;
+    let { patient, studies, interviewAnswers, chatHistory, message, patientId, patientBasicInfo, authToken } = body;
+
+    // Create an authenticated Supabase client if token provided (bypasses RLS)
+    const db = authToken
+      ? createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          { global: { headers: { Authorization: `Bearer ${authToken}` } } }
+        )
+      : createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
 
     // Option A: full patient object already passed (from patient profile page)
-    // Option B: only patientBasicInfo + patientId passed (from dashboard brief)
-    if (!patient && patientBasicInfo) {
-      patient = patientBasicInfo;
-    }
+    // Option B: patientBasicInfo + patientId passed (from dashboard brief)
+    if (!patient && patientBasicInfo) patient = patientBasicInfo;
 
-    // If we have a patientId but no studies/answers, try fetching them
-    // (may be blocked by RLS without a session — fail gracefully)
+    // Fetch studies and interview answers using authenticated client
     if (patientId && (!studies || studies.length === 0)) {
-      const { data: studiesData } = await supabase
+      const { data: studiesData } = await db
         .from('studies')
         .select('*, biomarkers(*)')
         .eq('patient_id', patientId)
@@ -30,7 +32,7 @@ export async function POST(req: Request) {
       studies = studiesData ?? [];
     }
     if (patientId && (!interviewAnswers || Object.keys(interviewAnswers ?? {}).length === 0)) {
-      const { data: answers } = await supabase
+      const { data: answers } = await db
         .from('interview_answers')
         .select('question_id, answer')
         .eq('patient_id', patientId);
