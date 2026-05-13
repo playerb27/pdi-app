@@ -239,29 +239,63 @@ export async function deleteBiomarkersForStudy(studyId: string): Promise<void> {
 
 // ─── Module 6 (Comparative Charts) — stored in localStorage ─────────────────
 // The report_modules table has a check constraint allowing only module_num 1-5.
-// We store comparative chart selections in localStorage keyed by patient ID.
+// We store comparative chart GROUPS in localStorage keyed by patient ID.
+// Each "Agregar al reporte" call saves a new independent comparison group.
+
+export interface ComparativeGroup {
+  id: string;
+  markers: string[];
+  createdAt: string;
+}
 
 const M6_KEY = (patientId: string) => `pdi_m6_${patientId}`;
 
-export function saveComparativeMarkers(patientId: string, markers: string[]): void {
-  if (typeof window === 'undefined') return;
-  const existing = getComparativeMarkers(patientId);
-  const merged = Array.from(new Set([...existing, ...markers])); // deduplicate
-  localStorage.setItem(M6_KEY(patientId), JSON.stringify({ markers: merged, updatedAt: new Date().toISOString() }));
-}
-
-export function getComparativeMarkers(patientId: string): string[] {
+export function getComparativeGroups(patientId: string): ComparativeGroup[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(M6_KEY(patientId));
     if (!raw) return [];
-    return JSON.parse(raw).markers ?? [];
-  } catch {
+    const parsed = JSON.parse(raw);
+    // Support both old format { markers: string[] } and new format { groups: [] }
+    if (Array.isArray(parsed.groups)) return parsed.groups;
+    // Migrate old flat format
+    if (Array.isArray(parsed.markers) && parsed.markers.length > 0) {
+      return [{ id: '1', markers: parsed.markers, createdAt: parsed.updatedAt ?? new Date().toISOString() }];
+    }
     return [];
-  }
+  } catch { return []; }
 }
 
-export function clearComparativeMarkers(patientId: string): void {
+export function saveComparativeGroup(patientId: string, markers: string[]): void {
+  if (typeof window === 'undefined') return;
+  const existing = getComparativeGroups(patientId);
+  const newGroup: ComparativeGroup = {
+    id: Date.now().toString(),
+    markers,
+    createdAt: new Date().toISOString(),
+  };
+  localStorage.setItem(M6_KEY(patientId), JSON.stringify({
+    groups: [...existing, newGroup],
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+export function removeComparativeGroup(patientId: string, groupId: string): void {
+  if (typeof window === 'undefined') return;
+  const existing = getComparativeGroups(patientId);
+  localStorage.setItem(M6_KEY(patientId), JSON.stringify({
+    groups: existing.filter(g => g.id !== groupId),
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+export function clearComparativeGroups(patientId: string): void {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(M6_KEY(patientId));
 }
+
+// Legacy compat shim
+export const saveComparativeMarkers = saveComparativeGroup;
+export const getComparativeMarkers = (patientId: string) =>
+  getComparativeGroups(patientId).flatMap(g => g.markers);
+export const clearComparativeMarkers = clearComparativeGroups;

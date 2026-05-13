@@ -8,7 +8,7 @@ import {
 import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
   getReportModules, upsertReportModule, deleteReportModules,
-  Patient, Study, ReportModule, getComparativeMarkers, clearComparativeMarkers
+  Patient, Study, ReportModule, getComparativeGroups, removeComparativeGroup, clearComparativeGroups, type ComparativeGroup
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
@@ -57,11 +57,11 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [editContent, setEditContent] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [expandedChart6, setExpandedChart6] = useState<ChartSeries | null>(null);
-  const [m6Markers, setM6Markers] = useState<string[]>([]);
+  const [m6Groups, setM6Groups] = useState<ComparativeGroup[]>([]);
 
-  // Load comparative markers from localStorage when patient ID is known
+  // Load comparative groups from localStorage when patient ID is known
   useEffect(() => {
-    if (id) setM6Markers(getComparativeMarkers(id));
+    if (id) setM6Groups(getComparativeGroups(id));
   }, [id]);
 
   // Build a ChartSeries from allStudies for a given canonical marker name
@@ -288,9 +288,9 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           {MODULE_DEFS.map((def) => {
             const mod = modules[def.num];
             const isGenerating = generating[def.num];
-            // Module 6 uses localStorage data, not Supabase
-            const hasContent = def.num === 6 ? m6Markers.length > 0 : !!mod?.content;
-            const isApproved = def.num === 6 ? m6Markers.length > 0 : mod?.status === 'approved';
+            // Module 6 uses localStorage groups, not Supabase
+            const hasContent = def.num === 6 ? m6Groups.length > 0 : !!mod?.content;
+            const isApproved = def.num === 6 ? m6Groups.length > 0 : mod?.status === 'approved';
             const isExpanded = expanded === def.num;
             const isEditing = editMode[def.num];
             const canGenerate = def.num <= 3 || def.num === 4
@@ -389,39 +389,56 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 {hasContent && isExpanded && !isGenerating && (
                   <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
                     {def.isComparative ? (
-                      /* Module 6: show full stacked charts (comparative view) */
+                      /* Module 6: each comparative group as an independent section */
                       (() => {
-                        const markers = m6Markers;
-                        const builtSeries = markers.map(m => buildSeriesForMarker(m)).filter(Boolean) as ChartSeries[];
                         return (
-                          <div style={{ padding: '20px 24px' }}>
-                            {/* Toolbar */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                          <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            {/* Global clear button */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                               <p style={{ margin: 0, fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                                {markers.length} gráfica{markers.length !== 1 ? 's' : ''} comparativa{markers.length !== 1 ? 's' : ''} · clic en cada una para editar valores
+                                {m6Groups.length} comparativa{m6Groups.length !== 1 ? 's' : ''} · clic en cada gráfica para editar valores
                               </p>
                               <button
-                                onClick={() => { clearComparativeMarkers(id); setM6Markers([]); setExpanded(null); }}
+                                onClick={() => { clearComparativeGroups(id); setM6Groups([]); setExpanded(null); }}
                                 style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: 'rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: '11px' }}
                               >
-                                Limpiar selección
+                                Limpiar todo
                               </button>
                             </div>
-                            {/* Stacked charts */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                              {builtSeries.map(s => (
-                                <FullWidthChart
-                                  key={s.name}
-                                  series={s}
-                                  onClick={() => setExpandedChart6(s)}
-                                />
-                              ))}
-                              {builtSeries.length === 0 && (
-                                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', textAlign: 'center', padding: '24px' }}>
-                                  No se encontraron datos para los marcadores seleccionados.
-                                </p>
-                              )}
-                            </div>
+
+                            {m6Groups.map((group, gi) => {
+                              const builtSeries = group.markers.map(m => buildSeriesForMarker(m)).filter(Boolean) as ChartSeries[];
+                              return (
+                                <div key={group.id} style={{ border: '1px solid rgba(212,175,55,0.15)', borderRadius: '14px', overflow: 'hidden' }}>
+                                  {/* Group header */}
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', background: 'rgba(212,175,55,0.05)', borderBottom: '1px solid rgba(212,175,55,0.1)' }}>
+                                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--gold-primary)' }}>
+                                      📊 Comparativa {gi + 1}: {group.markers.join(' · ')}
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        removeComparativeGroup(id, group.id);
+                                        setM6Groups(prev => prev.filter(g => g.id !== group.id));
+                                      }}
+                                      style={{ padding: '3px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(239,68,68,0.25)', color: 'rgba(239,68,68,0.6)', cursor: 'pointer', fontSize: '10px' }}
+                                    >
+                                      Eliminar
+                                    </button>
+                                  </div>
+                                  {/* Stacked charts */}
+                                  <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {builtSeries.map(s => (
+                                      <FullWidthChart key={s.name} series={s} onClick={() => setExpandedChart6(s)} />
+                                    ))}
+                                    {builtSeries.length === 0 && (
+                                      <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', padding: '12px' }}>
+                                        Sin datos para los marcadores seleccionados.
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         );
                       })()
