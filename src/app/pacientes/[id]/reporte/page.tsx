@@ -12,10 +12,33 @@ import {
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
-import { generatePrintHTML } from '@/lib/generatePrintHTML';
+import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
+
+// ─── SVG → PNG conversion (browser-only) ─────────────────────────────────────
+function svgToPngBase64(svgString: string, width = 700, height = 240): Promise<string> {
+  return new Promise((resolve) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { resolve(''); return; }
+    ctx.fillStyle = '#0f0f1a';
+    ctx.fillRect(0, 0, width, height);
+    const img = new Image();
+    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/png').split(',')[1] ?? '');
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(''); };
+    img.src = url;
+  });
+}
 
 // ─── Module definitions ───────────────────────────────────────────────────────
 const MODULE_DEFS = [
@@ -183,10 +206,32 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (!patient || downloadingWord) return;
     setDownloadingWord(true);
     try {
+      // Pre-render Module 6 charts as PNG images (same SVG as the app & PDF)
+      const m6GroupsWithImages = await Promise.all(
+        m6Groups.map(async (group) => {
+          const chartImages = await Promise.all(
+            group.markers.map(async (markerName) => {
+              const series = buildSeriesForPrint(markerName, allStudies);
+              if (!series) return { marker: markerName, pngBase64: '' };
+              const svgStr = svgForSeries(series);
+              const pngBase64 = await svgToPngBase64(svgStr);
+              return { marker: markerName, pngBase64 };
+            })
+          );
+          return { ...group, chartImages: chartImages.filter(c => c.pngBase64) };
+        })
+      );
+
       const res = await fetch('/api/report/word', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers: m6Groups.flatMap(g => g.markers), m6Groups }),
+        body: JSON.stringify({
+          patient,
+          modules,
+          studies: allStudies,
+          m6Markers: m6Groups.flatMap(g => g.markers),
+          m6Groups: m6GroupsWithImages,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();

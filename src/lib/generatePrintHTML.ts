@@ -25,7 +25,7 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
   return { min: null, max: null };
 }
 
-function svgForSeries(s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] }): string {
+export function svgForSeries(s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] }): string {
   const W = 700, H = 220;
   const PAD = { top: 28, right: 48, bottom: 44, left: 56 };
   const innerW = W - PAD.left - PAD.right;
@@ -81,7 +81,7 @@ function svgForSeries(s: { name: string; unit: string; referenceRange?: string; 
 }
 
 // Build a series from allStudies for a given marker name
-function buildSeriesForPrint(
+export function buildSeriesForPrint(
   markerName: string,
   allStudies: any[],
 ): { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] } | null {

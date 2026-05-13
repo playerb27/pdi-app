@@ -515,21 +515,48 @@ export async function generateWordReport(
     const color = MODULE_COLORS[num];
 
     if (num === 6) {
-      // Comparative charts — use m6Markers passed directly from localStorage
-      const selectedMarkers = m6Markers;
-      if (selectedMarkers.length > 0) {
+      // Module 6: use pre-rendered PNG images sent from the browser (exact same charts as app & PDF)
+      const groups = (m6Groups ?? []) as Array<{ id: string; markers: string[]; chartImages?: { marker: string; pngBase64: string }[] }>;
+      if (groups.length > 0) {
         children.push(buildModuleHeader(6));
         children.push(spacer(2));
-        const filteredStudies = studies.map(s => ({
-          ...s,
-          biomarkers: (s.biomarkers ?? []).filter((b: any) => {
-            const cn = normalizeBiomarkerName(b.name);
-            return selectedMarkers.includes(cn);
-          }),
-        })).filter(s => s.biomarkers.length > 0);
-        if (filteredStudies.length > 0) {
-          const cmpCharts = await buildEvolutionCharts(filteredStudies);
-          children.push(...cmpCharts);
+
+        for (let gi = 0; gi < groups.length; gi++) {
+          const group = groups[gi];
+          // Group heading
+          children.push(new Paragraph({
+            children: [run(`📊 Comparativa ${gi + 1}: ${group.markers.join(' · ')}`, { bold: true, size: 22, color: 'b8922a' })],
+            spacing: { before: 320, after: 120 },
+            border: { bottom: { style: BorderStyle.SINGLE, size: 2, color: 'd4af37' } },
+          }));
+          children.push(spacer());
+
+          if (group.chartImages && group.chartImages.length > 0) {
+            // Use pre-rendered PNGs — identical to what's shown in the app and PDF
+            for (const { marker, pngBase64 } of group.chartImages) {
+              const imgBuf = Buffer.from(pngBase64, 'base64');
+              children.push(new Paragraph({
+                children: [run(marker, { bold: true, size: 20, color: C.gray900 })],
+                spacing: { before: 120, after: 60 },
+              }));
+              children.push(new Paragraph({
+                children: [new ImageRun({ data: imgBuf, transformation: { width: 580, height: 197 }, type: 'png' })],
+                spacing: { before: 0, after: 160 },
+              }));
+            }
+          } else {
+            // Fallback: build via QuickChart for this group's markers
+            const filteredStudies = studies.map((s: any) => ({
+              ...s,
+              biomarkers: (s.biomarkers ?? []).filter((b: any) =>
+                group.markers.map((m: string) => normalizeBiomarkerName(m)).includes(normalizeBiomarkerName(b.name))
+              ),
+            })).filter((s: any) => s.biomarkers.length > 0);
+            if (filteredStudies.length > 0) {
+              const cmpCharts = await buildEvolutionCharts(filteredStudies);
+              children.push(...cmpCharts);
+            }
+          }
         }
       }
     } else if (num === 2 && mod.content.includes('"systems"')) {
