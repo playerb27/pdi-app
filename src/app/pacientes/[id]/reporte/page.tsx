@@ -186,7 +186,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
       const res = await fetch('/api/report/word', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers }),
+        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers: m6Groups.flatMap(g => g.markers) }),
       });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
