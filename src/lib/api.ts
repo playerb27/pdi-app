@@ -245,7 +245,9 @@ const M6_KEY = (patientId: string) => `pdi_m6_${patientId}`;
 
 export function saveComparativeMarkers(patientId: string, markers: string[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(M6_KEY(patientId), JSON.stringify({ markers, updatedAt: new Date().toISOString() }));
+  const existing = getComparativeMarkers(patientId);
+  const merged = Array.from(new Set([...existing, ...markers])); // deduplicate
+  localStorage.setItem(M6_KEY(patientId), JSON.stringify({ markers: merged, updatedAt: new Date().toISOString() }));
 }
 
 export function getComparativeMarkers(patientId: string): string[] {
