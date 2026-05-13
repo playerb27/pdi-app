@@ -14,6 +14,7 @@ import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
 import { generatePrintHTML } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
+import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
 
 // ─── Module definitions ───────────────────────────────────────────────────────
@@ -388,14 +389,16 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 {hasContent && isExpanded && !isGenerating && (
                   <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
                     {def.isComparative ? (
-                      /* Module 6: show marker chips from localStorage */
+                      /* Module 6: show full stacked charts (comparative view) */
                       (() => {
                         const markers = m6Markers;
+                        const builtSeries = markers.map(m => buildSeriesForMarker(m)).filter(Boolean) as ChartSeries[];
                         return (
-                          <div style={{ padding: '24px 28px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                              <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
-                                📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} · clic para editar valores
+                          <div style={{ padding: '20px 24px' }}>
+                            {/* Toolbar */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                              <p style={{ margin: 0, fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                                {markers.length} gráfica{markers.length !== 1 ? 's' : ''} comparativa{markers.length !== 1 ? 's' : ''} · clic en cada una para editar valores
                               </p>
                               <button
                                 onClick={() => { clearComparativeMarkers(id); setM6Markers([]); setExpanded(null); }}
@@ -404,21 +407,20 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                 Limpiar selección
                               </button>
                             </div>
-                            <p style={{ margin: '0 0 14px', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                              Haz clic en un marcador para abrir la gráfica y editar los valores antes de exportar.
-                            </p>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                              {markers.map((m, i) => (
-                                <button
-                                  key={i}
-                                  onClick={() => { const s = buildSeriesForMarker(m); if (s) setExpandedChart6(s); }}
-                                  style={{ padding: '8px 16px', borderRadius: '99px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'var(--font-main)' }}
-                                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.2)'; }}
-                                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.1)'; }}
-                                >
-                                  📈 {m}
-                                </button>
+                            {/* Stacked charts */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              {builtSeries.map(s => (
+                                <FullWidthChart
+                                  key={s.name}
+                                  series={s}
+                                  onClick={() => setExpandedChart6(s)}
+                                />
                               ))}
+                              {builtSeries.length === 0 && (
+                                <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '13px', textAlign: 'center', padding: '24px' }}>
+                                  No se encontraron datos para los marcadores seleccionados.
+                                </p>
+                              )}
                             </div>
                           </div>
                         );

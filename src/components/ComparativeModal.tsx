@@ -19,7 +19,7 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
   return { min: null, max: null };
 }
 
-function FullWidthChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
+export function FullWidthChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
   const W = 700, H = 220;
   const PAD = { top: 28, right: 40, bottom: 44, left: 56 };
   const innerW = W - PAD.left - PAD.right;
