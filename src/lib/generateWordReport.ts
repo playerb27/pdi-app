@@ -414,9 +414,15 @@ async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)
     const cells: TableCell[] = [];
 
     for (const [name, pts] of pair) {
-      const hasAlt = pts.some(p => p.flag !== 'Normal');
-      const lineColor = hasAlt ? 'dc2626' : '15803d';
+      const lastFlag = pts[pts.length - 1]?.flag ?? 'Normal';
+      const lineHex = lastFlag === 'Alto' ? 'ef4444' : lastFlag === 'Bajo' ? '3b82f6' : '22c55e';
       const sortedPts = [...pts].sort((a, b) => a.date.localeCompare(b.date));
+      const hasAlt = pts.some(p => p.flag !== 'Normal');
+
+      // Per-point colors based on flag
+      const pointColors = sortedPts.map(p =>
+        p.flag === 'Alto' ? '#ef4444' : p.flag === 'Bajo' ? '#3b82f6' : '#22c55e'
+      );
 
       const chartCfg = {
         type: 'line',
@@ -425,10 +431,13 @@ async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)
           datasets: [{
             label: name,
             data: sortedPts.map(p => p.value),
-            borderColor: `#${lineColor}`,
-            backgroundColor: `#${lineColor}22`,
-            pointRadius: 5,
-            pointBackgroundColor: `#${lineColor}`,
+            borderColor: `#${lineHex}`,
+            backgroundColor: `#${lineHex}33`,
+            pointRadius: 6,
+            pointBackgroundColor: pointColors,
+            pointBorderColor: '#0f0f1a',
+            pointBorderWidth: 2,
+            borderWidth: 2.5,
             tension: 0.3,
             fill: true,
           }],
@@ -444,7 +453,7 @@ async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)
 
       let imageData: Buffer | null = null;
       try {
-        const url = `https://quickchart.io/chart?w=400&h=220&bkg=white&c=${encodeURIComponent(JSON.stringify(chartCfg))}`;
+        const url = `https://quickchart.io/chart?w=460&h=240&bkg=%230f0f1a&c=${encodeURIComponent(JSON.stringify(chartCfg))}`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
         if (resp.ok) imageData = Buffer.from(await resp.arrayBuffer());
       } catch { /* skip chart if fetch fails */ }
@@ -452,15 +461,15 @@ async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)
       if (imageData) {
         cells.push(new TableCell({
           width: { size: 50, type: WidthType.PERCENTAGE },
-          borders: colorBorder(hasAlt ? C.red : C.green, 4),
+          borders: colorBorder(lastFlag === 'Alto' ? C.red : lastFlag === 'Bajo' ? '3b82f6' : C.green, 4),
           margins: { top: 100, bottom: 100, left: 120, right: 120 },
           children: [
             new Paragraph({
-              children: [run(name, { bold: true, size: 20, color: hasAlt ? C.red : C.green })],
+              children: [run(name, { bold: true, size: 20, color: lastFlag === 'Alto' ? C.red : lastFlag === 'Bajo' ? '3b82f6' : C.green })],
               spacing: { before: 0, after: 80 },
             }),
             new Paragraph({
-              children: [new ImageRun({ data: imageData, transformation: { width: 300, height: 165 }, type: 'png' })],
+              children: [new ImageRun({ data: imageData, transformation: { width: 320, height: 178 }, type: 'png' })],
               spacing: { before: 0, after: 60 },
             }),
             new Paragraph({
