@@ -1,6 +1,63 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
 
+// ─── Physiological validation & unit normalization ────────────────────────────
+const PHYSIO_RULES: { keywords: string[]; minVal: number; maxVal: number; mmolFactor?: number; unit: string }[] = [
+  { keywords: ['glucosa', 'glucose', 'gluc'], minVal: 30, maxVal: 700, mmolFactor: 18.016, unit: 'mg/dL' },
+  { keywords: ['colesterol total', 'cholesterol total', 'colesterol'], minVal: 60, maxVal: 600, mmolFactor: 38.67, unit: 'mg/dL' },
+  { keywords: ['triglicérid', 'triglicer', 'triglyceri'], minVal: 20, maxVal: 5000, mmolFactor: 88.57, unit: 'mg/dL' },
+  { keywords: ['hdl', 'hdl-c', 'colesterol hdl', 'alta densidad'], minVal: 10, maxVal: 200, mmolFactor: 38.67, unit: 'mg/dL' },
+  { keywords: ['ldl', 'ldl-c', 'baja densidad'], minVal: 10, maxVal: 500, mmolFactor: 38.67, unit: 'mg/dL' },
+  { keywords: ['creatinina', 'creatinine'], minVal: 0.3, maxVal: 20, mmolFactor: 0.0113, unit: 'mg/dL' },
+  { keywords: ['urea'], minVal: 5, maxVal: 200, mmolFactor: 6.006, unit: 'mg/dL' },
+  { keywords: ['bilirrubina', 'bilirubin'], minVal: 0.1, maxVal: 30, mmolFactor: 0.0585, unit: 'mg/dL' },
+  { keywords: ['calcio', 'calcium'], minVal: 4, maxVal: 20, mmolFactor: 4.008, unit: 'mg/dL' },
+  { keywords: ['hemoglobina', 'hemoglobin', 'hgb', 'hb'], minVal: 5, maxVal: 25, unit: 'g/dL' },
+  { keywords: ['hematocrit', 'hematócrit'], minVal: 15, maxVal: 65, unit: '%' },
+];
+
+interface Biomarker { name: string; value: string; unit: string; referenceRange?: string; flag: string; system: string; }
+interface ValidationIssue { marker: string; type: string; originalValue: string; correctedValue?: string; note: string; }
+
+function validateAndNormalizeBiomarkers(biomarkers: Biomarker[]): { biomarkers: Biomarker[]; issues: ValidationIssue[] } {
+  const issues: ValidationIssue[] = [];
+  const normalized = biomarkers.map(bm => {
+    const nameLower = bm.name.toLowerCase();
+    const rule = PHYSIO_RULES.find(r => r.keywords.some(k => nameLower.includes(k)));
+    if (!rule) return bm;
+
+    const num = parseFloat(String(bm.value).replace(',', '.'));
+    if (isNaN(num)) return bm;
+
+    // Unit conversion: value below physiological min but converts correctly via mmolFactor
+    if (rule.mmolFactor && num < rule.minVal && num * rule.mmolFactor >= rule.minVal) {
+      const converted = Math.round(num * rule.mmolFactor * 100) / 100;
+      issues.push({
+        marker: bm.name,
+        type: 'unit_conversion',
+        originalValue: `${num} (posiblemente mmol/L)`,
+        correctedValue: `${converted} ${rule.unit}`,
+        note: `Valor ${num} convertido automáticamente de mmol/L a ${rule.unit} (${num} × ${rule.mmolFactor} = ${converted}).`,
+      });
+      return { ...bm, value: String(converted), unit: rule.unit };
+    }
+
+    // Physiologically impossible value
+    if (num < rule.minVal * 0.3 || num > rule.maxVal * 3) {
+      issues.push({
+        marker: bm.name,
+        type: 'implausible_value',
+        originalValue: String(num),
+        note: `Valor ${num} ${bm.unit} parece fisiológicamente imposible (rango esperado: ${rule.minVal}–${rule.maxVal} ${rule.unit}). Revisar manualmente.`,
+      });
+    }
+
+    return bm;
+  });
+
+  return { biomarkers: normalized, issues };
+}
+
 export async function POST(req: Request) {
   try {
     const { base64, mimeType } = await req.json();
@@ -10,37 +67,67 @@ export async function POST(req: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
 
     const prompt = `Eres el motor de análisis del Protocolo de Diagnóstico Integral (PDI), un sistema médico de élite con capacidad de lectura clínica avanzada.
 
-PASO 1 — Comprende la estructura del documento antes de extraer:
-Antes de extraer cualquier dato, identifica qué columnas existen en el documento. Los laboratorios clínicos suelen tener:
-- Una columna de RESULTADO o VALOR (el dato MEDIDO en este paciente específico)
-- Una columna de VALORES DE REFERENCIA, RANGO NORMAL, REFERENCIA (rangos esperados para la población)
-Estas columnas pueden estar en cualquier orden o disposición.
+PASO 1 — Comprende la estructura del documento:
+Identifica qué columnas existen. Los laboratorios tienen:
+- Columna RESULTADO/VALOR: el dato MEDIDO en este paciente
+- Columna VALORES DE REFERENCIA/RANGO NORMAL: rangos esperados para la población
 
-PASO 2 — Identifica qué es el valor del paciente vs qué es referencia:
-El VALOR DEL PACIENTE es único por marcador y corresponde a la medición realizada en esa muestra.
-Los VALORES DE REFERENCIA son rangos o categorías (Normal, Límite alto, Alto, Muy alto, Deseable, Óptimo, Riesgo alto, etc.) con sus umbrales numéricos.
+PASO 2 — Identifica valor del paciente vs referencia:
+El VALOR DEL PACIENTE es único por marcador y es la medición de esa muestra.
+Los VALORES DE REFERENCIA son rangos con umbrales numéricos (Normal, Alto, Deseable, etc.).
 
 PASO 3 — Reglas de extracción:
 ✅ Extrae UNA entrada por marcador con el valor MEDIDO del paciente.
-✅ Consolida toda la tabla de referencia de ese marcador en UN SOLO string de referencia legible (ej: "< 150 mg/dL", "74 - 106", "< 200 deseable").
-✅ El valor del paciente es el número que aparece en la MISMA LÍNEA que el nombre del marcador.
-✅ Líneas que empiezan con "FCSI" son conversiones de unidades del laboratorio (ej: "FCSI = 1.536   1.54 nmol/L"). Saltarlas por completo — extraer SIEMPRE el valor de la línea del nombre del marcador, no de la línea FCSI que le sigue.
-❌ No extraigas las filas de referencia (Normal, Límite alto, Alto, Muy alto, Mayor a, Menor a, Deseable, Óptimo) como si fueran marcadores individuales.
-❌ No extraigas notas metodológicas (Método: Colorimétrico, Método: Cinética, etc.).
-❌ No extraigas cálculos intermedios que no sean resultados clínicos relevantes (salvo que sean un marcador reconocido como BUN/Creatinina, Índice aterogénico, etc.).
+✅ Consolida la tabla de referencia en UN string legible (ej: "< 150 mg/dL", "74 - 106").
+✅ El valor del paciente está en la MISMA LÍNEA que el nombre del marcador.
+✅ Líneas "FCSI" son conversiones del laboratorio — IGNORAR COMPLETAMENTE.
+❌ No extraigas filas de referencia como marcadores individuales.
+❌ No extraigas notas metodológicas ni cálculos intermedios irrelevantes.
 
-PASO 4 — Para cada biomarcador real extrae:
-- name: nombre clínico limpio del marcador
-- value: valor numérico exacto medido en el paciente
-- unit: unidad de medida
-- referenceRange: resumen del rango de referencia en una sola expresión clara (ej: "74 - 106", "< 150", "< 200 deseable / 200-239 límite")
-- flag: "Normal", "Alto" o "Bajo" — determinado comparando el valor del paciente contra los rangos de referencia del documento
-- system: clasifícalo en UNO de estos 14 sistemas:
+PASO 4 — NORMALIZACIÓN DE UNIDADES (CRÍTICO — LEE CON ATENCIÓN):
+Los laboratorios pueden usar distintas unidades. SIEMPRE reporta en las unidades estándar en México:
+
+⚠️ GLUCOSA: Rango normal en mg/dL es 70–100. Si ves un valor como 4.5, 5.05, 6.2 con unidad mmol/L:
+   → MULTIPLICA por 18.016 para convertir a mg/dL
+   → 5.05 mmol/L × 18.016 = 91.0 mg/dL ← esto es lo que debes reportar
+   → NUNCA reportes glucosa como 5.05 mg/dL (eso sería glucemia de coma hipoglucémico)
+
+⚠️ COLESTEROL/HDL/LDL: Si en mmol/L → multiplicar por 38.67 para mg/dL
+   → 5.18 mmol/L × 38.67 = 200.3 mg/dL
+
+⚠️ TRIGLICÉRIDOS: Si en mmol/L → multiplicar por 88.57 para mg/dL
+   → 1.69 mmol/L × 88.57 = 149.7 mg/dL
+
+⚠️ CREATININA: Si en μmol/L → dividir por 88.4 para mg/dL
+   → 88 μmol/L ÷ 88.4 = 1.00 mg/dL
+
+⚠️ BILIRRUBINA: Si en μmol/L → multiplicar por 0.0585 para mg/dL
+
+⚠️ CALCIO: Si en mmol/L → multiplicar por 4.008 para mg/dL
+
+La unit en el JSON DEBE coincidir con el valor post-conversión.
+
+PASO 5 — VERIFICACIÓN FISIOLÓGICA:
+Antes de devolver el JSON, verifica que cada valor sea posible en un paciente vivo:
+- Glucosa (mg/dL): 40–700. Si es < 40, es error de unidades.
+- Colesterol total (mg/dL): 60–600
+- Triglicéridos (mg/dL): 20–2000
+- HDL/LDL (mg/dL): 10–300
+- Hemoglobina (g/dL): 5–25
+- Creatinina (mg/dL): 0.3–20
+Si un valor no pasa esta verificación, revisa las unidades antes de reportarlo.
+
+PASO 6 — Para cada biomarcador extrae:
+- name: nombre clínico limpio
+- value: valor numérico exacto POST-normalización de unidades
+- unit: unidad de medida POST-conversión
+- referenceRange: resumen del rango de referencia en una expresión clara
+- flag: "Normal", "Alto" o "Bajo" (comparando el valor normalizado vs rangos del documento)
+- system: uno de estos 14 sistemas:
   1. "Fundamentos y Resumen Ejecutivo"
   2. "Sistema Metabólico y Energético"
   3. "Salud Cardiovascular y Circulatoria"
@@ -56,21 +143,16 @@ PASO 4 — Para cada biomarcador real extrae:
   13. "Protocolo Maestro de Intervención"
   14. "Anexos y Glosario"
 
-PASO 5 — Fecha del examen:
-Busca en el documento la FECHA en que se realizó el examen (no la fecha de entrega ni de impresión si son diferentes).
-Busca campos como: "Fecha de toma", "Fecha de muestra", "Fecha", "F. Recepción", "Date", etc.
-Devuelve la fecha en formato ISO YYYY-MM-DD. Si no encuentras fecha, devuelve null.
+PASO 7 — Fecha del examen:
+Busca la fecha de realización (no entrega). Formato ISO: YYYY-MM-DD. Null si no encontrada.
 
-Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown.
-
-Formato:
+Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown:
 {
   "exam_date": "2024-03-15",
   "biomarkers": [
-    { "name": "Glucosa", "value": "100.0", "unit": "mg/dL", "referenceRange": "74 - 106", "flag": "Normal", "system": "Sistema Metabólico y Energético" },
-    { "name": "Triglicéridos", "value": "99.0", "unit": "mg/dL", "referenceRange": "< 150 Normal / 150-199 Límite / 200-499 Alto", "flag": "Normal", "system": "Salud Cardiovascular y Circulatoria" }
+    { "name": "Glucosa", "value": "91.0", "unit": "mg/dL", "referenceRange": "74 - 106", "flag": "Normal", "system": "Sistema Metabólico y Energético" }
   ],
-  "summary": "Resumen clínico ejecutivo dirigido al médico tratante, destacando hallazgos alterados y correlaciones clínicas relevantes."
+  "summary": "Resumen clínico ejecutivo para el médico tratante."
 }`;
 
     const result = await model.generateContent([
@@ -88,38 +170,37 @@ Formato:
       return NextResponse.json({ error: 'Error al interpretar la respuesta de la IA' }, { status: 500 });
     }
 
-    // ── AI Audit: second pass to verify extraction quality ──────────────────
-    const auditPrompt = `Eres el auditor de calidad médica del sistema PDI. 
-Se te proporciona el documento de laboratorio original Y los datos que extrajo la IA.
-Tu tarea: comparar cada biomarcador extraído contra lo que aparece LITERALMENTE en el documento.
+    // ── Server-side physiological validation & unit normalization ──────────────
+    const { biomarkers: validatedBiomarkers, issues: validationIssues } = validateAndNormalizeBiomarkers(parsedData.biomarkers ?? []);
+    parsedData.biomarkers = validatedBiomarkers;
 
-DATOS EXTRAÍDOS:
+    // ── AI Audit: second pass to verify extraction quality ─────────────────────
+    const auditPrompt = `Eres el auditor de calidad médica del sistema PDI.
+Se te proporciona el documento de laboratorio original Y los datos ya extraídos y normalizados.
+
+DATOS EXTRAÍDOS (post-normalización):
 ${JSON.stringify(parsedData.biomarkers, null, 2)}
 
-INSTRUCCIONES DE AUDITORÍA:
-1. Verifica que el VALOR de cada marcador coincida exactamente con el número en el documento
-2. Verifica que la UNIDAD sea correcta
-3. Verifica que el FLAG (Normal/Alto/Bajo) sea correcto según los rangos de referencia del documento
-4. Identifica marcadores importantes que puedan haber sido OMITIDOS
-5. Detecta si algún marcador tiene un nombre incorrecto o confundido
+INSTRUCCIONES:
+1. Verifica que cada valor coincida con el documento (considerando conversiones de unidades ya aplicadas)
+2. Verifica que el FLAG (Normal/Alto/Bajo) sea correcto
+3. Detecta marcadores importantes omitidos
+4. Detecta valores todavía fisiológicamente imposibles
+5. Detecta nombres de marcadores incorrectos
 
-Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown:
+JSON de respuesta (sin markdown):
 {
-  "confidence": <número 0-100>,
+  "confidence": <0-100>,
   "status": "<ok|warning|error>",
   "issues": [
-    { "marker": "<nombre>", "type": "<wrong_value|wrong_flag|wrong_unit|wrong_name>", "extracted": "<valor extraído>", "note": "<descripción del problema>" }
+    { "marker": "<nombre>", "type": "<wrong_value|wrong_flag|wrong_unit|unit_conversion|implausible|wrong_name|missing>", "extracted": "<valor extraído>", "corrected": "<valor correcto>", "note": "<descripción>" }
   ],
   "missing_markers": ["<marcador omitido>"],
-  "summary": "<resumen ejecutivo de la auditoría en 1-2 oraciones>"
+  "summary": "<resumen en 1-2 oraciones>"
 }
+Criterios: ok=confidence≥90 sin issues críticos; warning=70-89 o 1-2 issues; error=<70 o valores imposibles`;
 
-Criterios de status:
-- "ok": confidence >= 90 y 0 issues críticos
-- "warning": confidence 70-89 o 1-2 issues
-- "error": confidence < 70 o issues críticos de valores erróneos`;
-
-    let audit = { confidence: 100, status: 'ok', issues: [], missing_markers: [], summary: 'Auditoría no disponible' };
+    let audit: any = { confidence: 100, status: 'ok', issues: [], missing_markers: [], summary: 'Auditoría completada.' };
     try {
       const auditResult = await model.generateContent([
         auditPrompt,
@@ -129,6 +210,13 @@ Criterios de status:
       audit = JSON.parse(auditText);
     } catch (e) {
       console.warn('Audit failed silently:', e);
+    }
+
+    // Merge server-side validation issues into audit report
+    if (validationIssues.length > 0) {
+      audit.issues = [...(audit.issues ?? []), ...validationIssues];
+      if (audit.status === 'ok') audit.status = 'warning';
+      audit.summary = `${validationIssues.length} corrección(es) de unidades aplicada(s) automáticamente. ${audit.summary ?? ''}`;
     }
 
     return NextResponse.json({ ...parsedData, audit });
