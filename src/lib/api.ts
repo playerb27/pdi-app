@@ -236,3 +236,30 @@ export async function getPatientProgressBatch(
 export async function deleteBiomarkersForStudy(studyId: string): Promise<void> {
   await supabase.from('biomarkers').delete().eq('study_id', studyId);
 }
+
+// ─── Module 6 (Comparative Charts) — stored in localStorage ─────────────────
+// The report_modules table has a check constraint allowing only module_num 1-5.
+// We store comparative chart selections in localStorage keyed by patient ID.
+
+const M6_KEY = (patientId: string) => `pdi_m6_${patientId}`;
+
+export function saveComparativeMarkers(patientId: string, markers: string[]): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(M6_KEY(patientId), JSON.stringify({ markers, updatedAt: new Date().toISOString() }));
+}
+
+export function getComparativeMarkers(patientId: string): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(M6_KEY(patientId));
+    if (!raw) return [];
+    return JSON.parse(raw).markers ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function clearComparativeMarkers(patientId: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(M6_KEY(patientId));
+}

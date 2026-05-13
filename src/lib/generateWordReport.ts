@@ -490,9 +490,12 @@ export async function generateWordReport(
   patient: { full_name: string; birth_date?: string; gender?: string },
   modules: Record<number, { module_num: number; content: string; status: string }>,
   studies: any[] = [],
+  m6Markers: string[] = [],
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
-  const approvedNums = [1, 2, 3, 4, 5, 6].filter(n => modules[n]?.status === 'approved');
+  const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
+  // Add module 6 if comparative markers were passed from localStorage
+  if (m6Markers.length > 0) approvedNums.push(6);
 
   const children: (Paragraph | Table)[] = [
     ...buildCover(patient, approvedNums, dateStr),
@@ -503,9 +506,8 @@ export async function generateWordReport(
     const color = MODULE_COLORS[num];
 
     if (num === 6) {
-      // Comparative charts module — render selected markers as QuickChart images
-      let selectedMarkers: string[] = [];
-      try { selectedMarkers = JSON.parse(mod.content).markers ?? []; } catch {}
+      // Comparative charts — use m6Markers passed directly from localStorage
+      const selectedMarkers = m6Markers;
       if (selectedMarkers.length > 0) {
         children.push(buildModuleHeader(6));
         children.push(spacer(2));

@@ -2,7 +2,7 @@
 import { useState, useEffect, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare } from 'lucide-react';
-import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, upsertReportModule, Patient, Study } from '@/lib/api';
+import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
@@ -108,9 +108,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   };
 
   const handleAddToReport = async (names: string[]): Promise<boolean> => {
-    const ok = await upsertReportModule(id, 6, 'Gráficas Comparativas', JSON.stringify({ type: 'comparative', markers: names }), 'approved');
-    if (ok) setAddedToReport(true);
-    return ok;
+    try {
+      saveComparativeMarkers(id, names);
+      setAddedToReport(true);
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   // Biomarker inline edit state

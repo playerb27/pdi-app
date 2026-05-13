@@ -8,7 +8,7 @@ import {
 import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
   getReportModules, upsertReportModule, deleteReportModules,
-  Patient, Study, ReportModule
+  Patient, Study, ReportModule, getComparativeMarkers, clearComparativeMarkers
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
@@ -56,6 +56,12 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [editContent, setEditContent] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [expandedChart6, setExpandedChart6] = useState<ChartSeries | null>(null);
+  const [m6Markers, setM6Markers] = useState<string[]>([]);
+
+  // Load comparative markers from localStorage when patient ID is known
+  useEffect(() => {
+    if (id) setM6Markers(getComparativeMarkers(id));
+  }, [id]);
 
   // Build a ChartSeries from allStudies for a given canonical marker name
   const buildSeriesForMarker = (markerName: string): ChartSeries | null => {
@@ -179,7 +185,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
       const res = await fetch('/api/report/word', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient, modules, studies: allStudies }),
+        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers }),
       });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
@@ -281,8 +287,9 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           {MODULE_DEFS.map((def) => {
             const mod = modules[def.num];
             const isGenerating = generating[def.num];
-            const hasContent = !!mod?.content;
-            const isApproved = mod?.status === 'approved';
+            // Module 6 uses localStorage data, not Supabase
+            const hasContent = def.num === 6 ? m6Markers.length > 0 : !!mod?.content;
+            const isApproved = def.num === 6 ? m6Markers.length > 0 : mod?.status === 'approved';
             const isExpanded = expanded === def.num;
             const isEditing = editMode[def.num];
             const canGenerate = def.num <= 3 || def.num === 4
@@ -381,15 +388,22 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 {hasContent && isExpanded && !isGenerating && (
                   <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
                     {def.isComparative ? (
-                      /* Module 6: show marker chips, each clickable to edit */
+                      /* Module 6: show marker chips from localStorage */
                       (() => {
-                        let markers: string[] = [];
-                        try { markers = JSON.parse(mod.content).markers ?? []; } catch {}
+                        const markers = m6Markers;
                         return (
                           <div style={{ padding: '24px 28px' }}>
-                            <p style={{ margin: '0 0 8px', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
-                              📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} · clic para editar valores
-                            </p>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                              <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
+                                📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} · clic para editar valores
+                              </p>
+                              <button
+                                onClick={() => { clearComparativeMarkers(id); setM6Markers([]); setExpanded(null); }}
+                                style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: 'rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: '11px' }}
+                              >
+                                Limpiar selección
+                              </button>
+                            </div>
                             <p style={{ margin: '0 0 14px', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
                               Haz clic en un marcador para abrir la gráfica y editar los valores antes de exportar.
                             </p>
