@@ -171,7 +171,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (!patient) return;
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { alert('Permite ventanas emergentes para generar el PDF.'); return; }
-    const html = generatePrintHTML(patient, modules);
+    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies);
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -186,7 +186,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
       const res = await fetch('/api/report/word', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers: m6Groups.flatMap(g => g.markers) }),
+        body: JSON.stringify({ patient, modules, studies: allStudies, m6Markers: m6Groups.flatMap(g => g.markers), m6Groups }),
       });
       if (!res.ok) throw new Error(await res.text());
       const blob = await res.blob();
