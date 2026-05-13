@@ -500,11 +500,12 @@ export async function generateWordReport(
   modules: Record<number, { module_num: number; content: string; status: string }>,
   studies: any[] = [],
   m6Markers: string[] = [],
+  m6Groups: Array<{ id: string; markers: string[]; chartImages?: { marker: string; pngBase64: string }[] }> = [],
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
   const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
-  // Add module 6 if comparative markers were passed from localStorage
-  if (m6Markers.length > 0) approvedNums.push(6);
+  // Add module 6 if comparative groups were passed from localStorage
+  if (m6Groups.length > 0 || m6Markers.length > 0) approvedNums.push(6);
 
   const children: (Paragraph | Table)[] = [
     ...buildCover(patient, approvedNums, dateStr),
