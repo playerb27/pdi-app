@@ -152,9 +152,10 @@ interface Props {
   series: ChartSeries[];
   onClose: () => void;
   onAddToReport: (names: string[]) => Promise<boolean>;
+  onValueUpdated?: (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => void;
 }
 
-export default function ComparativeModal({ series: initialSeries, onClose, onAddToReport }: Props) {
+export default function ComparativeModal({ series: initialSeries, onClose, onAddToReport, onValueUpdated }: Props) {
   // Keep a mutable local copy so edits from ExpandedChartModal persist in the comparative view
   const [localSeries, setLocalSeries] = useState<ChartSeries[]>(initialSeries);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
@@ -167,7 +168,6 @@ export default function ComparativeModal({ series: initialSeries, onClose, onAdd
   const handleValueUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
     const updatedValue = parseFloat(newValue);
     if (isNaN(updatedValue)) return;
-    // Update localSeries
     setLocalSeries(prev => prev.map(s => ({
       ...s,
       points: s.points.map(p =>
@@ -176,7 +176,6 @@ export default function ComparativeModal({ series: initialSeries, onClose, onAdd
           : p
       ),
     })));
-    // Also update the currently-open expanded series so it reflects the change
     setExpandedSeries(prev => prev ? {
       ...prev,
       points: prev.points.map(p =>
@@ -185,6 +184,8 @@ export default function ComparativeModal({ series: initialSeries, onClose, onAdd
           : p
       ),
     } : null);
+    // Propagate up to page.tsx so studies state gets updated
+    onValueUpdated?.(biomarkerId, newValue, newFlag, studyId);
   };
 
   const handleAdd = async () => {

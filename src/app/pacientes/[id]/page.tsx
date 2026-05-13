@@ -117,6 +117,16 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     }
   };
 
+  // Single source of truth for updating a biomarker value across all views
+  const handleBiomarkerUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
+    setStudies(prev => prev.map(s => s.id !== studyId ? s : {
+      ...s,
+      biomarkers: (s.biomarkers as any[]).map(b =>
+        (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
+      ),
+    }));
+  };
+
   // Biomarker inline edit state
   const [editBm, setEditBm] = useState<{ bm: Biomarker; studyId: string } | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -904,12 +914,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               selectedForCompare={selectedForCompare}
               onToggleCompare={toggleSelectForCompare}
               onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
-                setStudies(prev => prev.map(s => s.id !== studyId ? s : {
-                  ...s,
-                  biomarkers: (s.biomarkers as any[]).map(b =>
-                    (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: b.value }
-                  ),
-                }));
+                handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId);
               }}
             />
           )}
@@ -935,6 +940,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 series={selectedSeries}
                 onClose={() => setShowComparativeModal(false)}
                 onAddToReport={handleAddToReport}
+                onValueUpdated={handleBiomarkerUpdated}
               />
             );
           })()}

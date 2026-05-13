@@ -478,6 +478,24 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
         <ExpandedChartModal
           series={expandedChart6}
           onClose={() => setExpandedChart6(null)}
+          onValueUpdated={(biomarkerId, newValue, newFlag, studyId) => {
+            // Sync allStudies state so all chart re-renders reflect the edit
+            setAllStudies(prev => prev.map(s => s.id !== studyId ? s : {
+              ...s,
+              biomarkers: (s.biomarkers as any[]).map(b =>
+                (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
+              ),
+            }));
+            // Also update the expanded series itself so chart re-draws immediately
+            setExpandedChart6(prev => prev ? {
+              ...prev,
+              points: prev.points.map(p =>
+                p.biomarkerId === biomarkerId && p.studyId === studyId
+                  ? { ...p, value: parseFloat(newValue) || p.value, flag: newFlag }
+                  : p
+              ),
+            } : null);
+          }}
         />
       )}
     </>
