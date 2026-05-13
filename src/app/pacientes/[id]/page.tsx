@@ -107,9 +107,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     });
   };
 
-  const handleAddToReport = async (names: string[]) => {
-    await upsertReportModule(id, 6, 'Gráficas Comparativas', JSON.stringify({ type: 'comparative', markers: names }), 'approved');
-    setAddedToReport(true);
+  const handleAddToReport = async (names: string[]): Promise<boolean> => {
+    const ok = await upsertReportModule(id, 6, 'Gráficas Comparativas', JSON.stringify({ type: 'comparative', markers: names }), 'approved');
+    if (ok) setAddedToReport(true);
+    return ok;
   };
 
   // Biomarker inline edit state
@@ -930,7 +931,6 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 series={selectedSeries}
                 onClose={() => setShowComparativeModal(false)}
                 onAddToReport={handleAddToReport}
-                addedToReport={addedToReport}
               />
             );
           })()}

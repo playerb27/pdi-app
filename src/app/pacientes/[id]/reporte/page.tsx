@@ -13,6 +13,8 @@ import {
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
 import { generatePrintHTML } from '@/lib/generatePrintHTML';
+import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
+import { normalizeBiomarkerName } from '@/lib/biomarkers';
 
 // ─── Module definitions ───────────────────────────────────────────────────────
 const MODULE_DEFS = [
@@ -53,6 +55,26 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [editMode, setEditMode] = useState<Record<number, boolean>>({});
   const [editContent, setEditContent] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState<Record<number, boolean>>({});
+  const [expandedChart6, setExpandedChart6] = useState<ChartSeries | null>(null);
+
+  // Build a ChartSeries from allStudies for a given canonical marker name
+  const buildSeriesForMarker = (markerName: string): ChartSeries | null => {
+    const points: ChartSeries['points'] = [];
+    const getStudyDate = (s: any) => { const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null; return s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at); };
+    const sorted = [...allStudies].sort((a, b) => new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime());
+    let unit = '', refRange = '';
+    for (const study of sorted) {
+      for (const bm of (study.biomarkers ?? [])) {
+        const num = parseFloat(bm.value); if (isNaN(num)) continue;
+        if (normalizeBiomarkerName(bm.name) !== markerName) continue;
+        unit = bm.unit ?? '';
+        refRange = (bm as any).referenceRange ?? (bm as any).reference_range ?? '';
+        points.push({ date: getStudyDate(study), value: num, flag: bm.flag, biomarkerId: bm.id, studyId: study.id });
+      }
+    }
+    if (!points.length) return null;
+    return { name: markerName, unit, referenceRange: refRange, points };
+  };
 
   useEffect(() => { loadAll(); }, [id]);
 
@@ -359,25 +381,31 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 {hasContent && isExpanded && !isGenerating && (
                   <div style={{ borderTop: '1px solid var(--border-subtle)' }}>
                     {def.isComparative ? (
-                      /* Module 6: show marker chips */
+                      /* Module 6: show marker chips, each clickable to edit */
                       (() => {
                         let markers: string[] = [];
                         try { markers = JSON.parse(mod.content).markers ?? []; } catch {}
                         return (
                           <div style={{ padding: '24px 28px' }}>
-                            <p style={{ margin: '0 0 14px', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
-                              📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} comparativa{markers.length !== 1 ? 's' : ''} incluida{markers.length !== 1 ? 's' : ''}
+                            <p style={{ margin: '0 0 8px', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', fontWeight: 600 }}>
+                              📊 {markers.length} gráfica{markers.length !== 1 ? 's' : ''} · clic para editar valores
+                            </p>
+                            <p style={{ margin: '0 0 14px', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                              Haz clic en un marcador para abrir la gráfica y editar los valores antes de exportar.
                             </p>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                               {markers.map((m, i) => (
-                                <span key={i} style={{ padding: '6px 14px', borderRadius: '99px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', fontSize: '13px', fontWeight: 600 }}>
+                                <button
+                                  key={i}
+                                  onClick={() => { const s = buildSeriesForMarker(m); if (s) setExpandedChart6(s); }}
+                                  style={{ padding: '8px 16px', borderRadius: '99px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', fontFamily: 'var(--font-main)' }}
+                                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.2)'; }}
+                                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.1)'; }}
+                                >
                                   📈 {m}
-                                </span>
+                                </button>
                               ))}
                             </div>
-                            <p style={{ margin: '16px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                              Estas gráficas se incluirán automáticamente en el Word al descargar el reporte.
-                            </p>
                           </div>
                         );
                       })()
@@ -430,6 +458,12 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           )}
         </div>
       </div>
+      {expandedChart6 && (
+        <ExpandedChartModal
+          series={expandedChart6}
+          onClose={() => setExpandedChart6(null)}
+        />
+      )}
     </>
   );
 }
