@@ -154,12 +154,38 @@ interface Props {
   onAddToReport: (names: string[]) => Promise<boolean>;
 }
 
-export default function ComparativeModal({ series, onClose, onAddToReport }: Props) {
+export default function ComparativeModal({ series: initialSeries, onClose, onAddToReport }: Props) {
+  // Keep a mutable local copy so edits from ExpandedChartModal persist in the comparative view
+  const [localSeries, setLocalSeries] = useState<ChartSeries[]>(initialSeries);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const names = series.map(s => s.name);
+  const names = localSeries.map(s => s.name);
+
+  // Called when ExpandedChartModal saves an edited point
+  const handleValueUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
+    const updatedValue = parseFloat(newValue);
+    if (isNaN(updatedValue)) return;
+    // Update localSeries
+    setLocalSeries(prev => prev.map(s => ({
+      ...s,
+      points: s.points.map(p =>
+        p.biomarkerId === biomarkerId && p.studyId === studyId
+          ? { ...p, value: updatedValue, flag: newFlag }
+          : p
+      ),
+    })));
+    // Also update the currently-open expanded series so it reflects the change
+    setExpandedSeries(prev => prev ? {
+      ...prev,
+      points: prev.points.map(p =>
+        p.biomarkerId === biomarkerId && p.studyId === studyId
+          ? { ...p, value: updatedValue, flag: newFlag }
+          : p
+      ),
+    } : null);
+  };
 
   const handleAdd = async () => {
     setSaving(true);
@@ -190,7 +216,7 @@ export default function ComparativeModal({ series, onClose, onAddToReport }: Pro
               </div>
               <div>
                 <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#fff' }}>Análisis Comparativo</h2>
-                <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{series.length} marcadores · clic en cada gráfica para editar valores</p>
+                <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{localSeries.length} marcadores · clic en cada gráfica para editar valores</p>
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -210,7 +236,7 @@ export default function ComparativeModal({ series, onClose, onAddToReport }: Pro
 
           {/* Stacked charts */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {series.map(s => (
+            {localSeries.map(s => (
               <FullWidthChart key={s.name} series={s} onClick={() => setExpandedSeries(s)} />
             ))}
           </div>
@@ -226,6 +252,7 @@ export default function ComparativeModal({ series, onClose, onAddToReport }: Pro
         <ExpandedChartModal
           series={expandedSeries}
           onClose={() => setExpandedSeries(null)}
+          onValueUpdated={handleValueUpdated}
         />
       )}
 
