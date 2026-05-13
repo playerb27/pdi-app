@@ -540,8 +540,14 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               <h1 style={{ fontSize: '26px', margin: 0, color: 'var(--text-primary)' }}>{patient.full_name}</h1>
               <button onClick={() => setIsEditModalOpen(true)} style={{ ...styles.iconBtn, color: 'var(--gold-primary)' }}><Edit2 size={16} /></button>
             </div>
-            <p style={{ color: 'var(--gold-primary)', fontSize: '13px', marginTop: '4px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-main)' }}>
-              {patient.gender === 'male' ? 'Hombre' : patient.gender === 'female' ? 'Mujer' : 'Otro'} · {calculateAge(patient.birth_date)} · {patient.status}
+            <p style={{ fontSize: '13px', marginTop: '4px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-main)' }}>
+              <span style={{ color: 'var(--gold-primary)' }}>
+                {patient.gender === 'male' ? 'Hombre' : patient.gender === 'female' ? 'Mujer' : 'Otro'} · {calculateAge(patient.birth_date)}
+              </span>
+              {' · '}
+              <span style={{ color: interviewPct === 100 ? '#22c55e' : 'rgba(255,255,255,0.4)' }}>
+                {interviewPct === 100 ? '✓ Entrevista completa' : interviewPct > 0 ? `Entrevista ${interviewPct}%` : 'Entrevista pendiente'}
+              </span>
             </p>
           </div>
         </div>
