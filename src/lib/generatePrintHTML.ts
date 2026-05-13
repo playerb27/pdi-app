@@ -118,6 +118,39 @@ function mdToHtml(text: string): string {
     .replace(/🟢/g, '<span class="badge badge-green">🟢</span>');
 }
 
+// Maps system names to safe fallback emojis
+const SYSTEM_EMOJI_MAP: Record<string, string> = {
+  lipid: '🫀', lípid: '🫀', grasa: '🫀', colesterol: '🫀',
+  hepátic: '🫁', hígad: '🫁', hepat: '🫁',
+  renal: '🫘', riñón: '🫘', riñon: '🫘',
+  tiroid: '🦋',
+  glucos: '🩸', diabét: '🩸', glucemi: '🩸', hemoglobin: '🩸', sangr: '🩸',
+  cardiovascular: '❤️', corazón: '❤️', cardiaco: '❤️',
+  inmun: '🛡️', inflamac: '🛡️',
+  hormon: '⚗️', endocrin: '⚗️',
+  hematolog: '💉', eritrocit: '💉', leucocit: '💉',
+  mineral: '⚡', electrolít: '⚡',
+  vitam: '💊',
+  muscul: '💪', protein: '💪',
+  digestiv: '🫃', intestin: '🫃',
+  nervios: '🧠', neurolog: '🧠',
+};
+
+function sanitizeIcon(icon: string, systemName: string): string {
+  // Accept only single/double character sequences that are likely emoji
+  // Emoji are typically 1-2 Unicode code points. If the icon has > 4 chars it's likely text.
+  const stripped = icon?.trim() ?? '';
+  // Check if it's a valid emoji-like string (short, no Arabic/Hebrew/CJK text blocks)
+  const hasNonEmojiText = /[\u0600-\u06FF\u0590-\u05FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF]/.test(stripped) || stripped.length > 6;
+  if (!hasNonEmojiText && stripped.length > 0) return stripped;
+  // Fallback: find emoji by system name keyword
+  const nameLower = systemName.toLowerCase();
+  for (const [key, emoji] of Object.entries(SYSTEM_EMOJI_MAP)) {
+    if (nameLower.includes(key)) return emoji;
+  }
+  return '🔬'; // generic fallback
+}
+
 // Convert M2 JSON to print-friendly HTML
 function m2JsonToHtml(content: string): string {
   try {
@@ -146,7 +179,7 @@ function m2JsonToHtml(content: string): string {
       html += `
       <div class="m2-system" style="border-left:4px solid ${bc}">
         <div class="m2-system-header">
-          <span class="m2-icon">${sys.icon}</span>
+          <span class="m2-icon">${sanitizeIcon(sys.icon, sys.name)}</span>
           <div>
             <h3 class="m2-system-title">${sys.name}</h3>
             <span class="m2-badge" style="color:${bc};border-color:${bc}">${alertLabel[sys.alertLevel] ?? ''} · Vitalidad: ${sys.vitalityScore}%</span>
