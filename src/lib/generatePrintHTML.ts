@@ -220,6 +220,7 @@ export function generatePrintHTML(
   generatedAt: Date = new Date(),
   m6Groups: ComparativeGroupForPrint[] = [],
   allStudies: any[] = [],
+  latestBiomarkers: any[] = [],
 ): string {
   const patientAge = (() => {
     if (!patient.birth_date) return null;
@@ -249,6 +250,101 @@ export function generatePrintHTML(
       <div class="module-body">${bodyHtml}</div>
     </div>`;
   }).join('\n');
+
+  // ── Tabla Maestra de Biomarcadores ──────────────────────────────────────────
+  let tablaSection = '';
+  if (latestBiomarkers.length > 0) {
+    // Group by system
+    const bySystem: Record<string, any[]> = {};
+    for (const bm of latestBiomarkers) {
+      const sys = bm.system ?? 'Otros';
+      if (!bySystem[sys]) bySystem[sys] = [];
+      bySystem[sys].push(bm);
+    }
+
+    // Sort: altered first within each system
+    const sortedSystems = Object.entries(bySystem).sort(([a], [b]) => a.localeCompare(b));
+
+    const flagColor = (flag: string) => {
+      const f = (flag ?? '').toLowerCase();
+      if (f === 'alto') return { bg: '#fef2f2', text: '#dc2626', border: '#fca5a5', badge: '#ef4444' };
+      if (f === 'bajo') return { bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd', badge: '#3b82f6' };
+      return { bg: '#f0fdf4', text: '#15803d', border: '#86efac', badge: '#22c55e' };
+    };
+
+    const rows = sortedSystems.map(([sysName, bms]) => {
+      // Sort: altered first
+      const sorted = [...bms].sort((a, b) => {
+        const aAlt = a.flag !== 'Normal' ? 0 : 1;
+        const bAlt = b.flag !== 'Normal' ? 0 : 1;
+        return aAlt - bAlt;
+      });
+      const sysHeader = `
+        <tr style="background:#f1f5f9">
+          <td colspan="4" style="padding:8px 14px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1.5px;color:#475569;border-bottom:2px solid #e2e8f0">
+            ${sysName}
+          </td>
+        </tr>`;
+      const bmRows = sorted.map(bm => {
+        const c = flagColor(bm.flag);
+        const isAltered = bm.flag !== 'Normal';
+        return `
+        <tr style="background:${isAltered ? c.bg : 'white'};border-bottom:1px solid #f1f5f9">
+          <td style="padding:7px 14px;font-size:11.5px;font-weight:${isAltered ? '700' : '400'};color:${isAltered ? c.text : '#374151'};max-width:220px">
+            ${isAltered ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${c.badge};margin-right:6px;vertical-align:middle"></span>` : '<span style="display:inline-block;width:6px;height:6px;margin-right:6px"></span>'}
+            ${bm.name}
+          </td>
+          <td style="padding:7px 14px;font-size:13px;font-weight:${isAltered ? '800' : '600'};color:${isAltered ? c.text : '#111827'};text-align:right;white-space:nowrap">
+            ${bm.value}
+          </td>
+          <td style="padding:7px 10px;font-size:10px;color:#9ca3af;text-align:left;white-space:nowrap">
+            ${bm.unit ?? ''}
+          </td>
+          <td style="padding:7px 14px;font-size:10.5px;color:#6b7280;text-align:right;white-space:nowrap">
+            ${bm.referenceRange ?? '—'}
+          </td>
+        </tr>`;
+      }).join('');
+      return sysHeader + bmRows;
+    }).join('');
+
+    const alteredCount = latestBiomarkers.filter(b => b.flag !== 'Normal').length;
+    const normalCount = latestBiomarkers.length - alteredCount;
+
+    tablaSection = `
+    <div class="module-section" id="tabla-maestra" style="padding:40px 60px">
+      <div class="module-header" style="border-color:#d4af37">
+        <span class="module-num" style="background:#b8922a">ANEXO</span>
+        <h2 class="module-title">📋 Tabla Maestra de Biomarcadores</h2>
+      </div>
+      <div style="display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap">
+        <div style="padding:10px 20px;border-radius:10px;background:#f0fdf4;border:1px solid #86efac;text-align:center">
+          <div style="font-size:22px;font-weight:900;color:#15803d">${normalCount}</div>
+          <div style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:1px">En rango normal</div>
+        </div>
+        <div style="padding:10px 20px;border-radius:10px;background:#fef2f2;border:1px solid #fca5a5;text-align:center">
+          <div style="font-size:22px;font-weight:900;color:#dc2626">${alteredCount}</div>
+          <div style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:1px">Fuera de rango</div>
+        </div>
+        <div style="padding:10px 20px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;text-align:center">
+          <div style="font-size:22px;font-weight:900;color:#374151">${latestBiomarkers.length}</div>
+          <div style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:1px">Total analizado</div>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;font-family:'Inter',sans-serif">
+        <thead>
+          <tr style="background:#1e293b">
+            <th style="padding:10px 14px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#94a3b8">Biomarcador</th>
+            <th style="padding:10px 14px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#94a3b8">Valor</th>
+            <th style="padding:10px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#94a3b8">Unidad</th>
+            <th style="padding:10px 14px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#94a3b8">Referencia</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p style="margin-top:14px;font-size:9px;color:#9ca3af;text-align:right">Fuente: Tabla Maestra PDI — Generado el ${dateStr}</p>
+    </div>`;
+  }
 
   // Module 6 — Comparative Charts (from localStorage via m6Groups)
   let m6Section = '';
@@ -404,6 +500,7 @@ export function generatePrintHTML(
 
   <!-- Module Sections -->
   ${moduleSections}
+  ${tablaSection}
   ${m6Section}
 
 </body>

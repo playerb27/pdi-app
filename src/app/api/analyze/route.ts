@@ -1,228 +1,429 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
 
-// ─── Physiological validation & unit normalization ────────────────────────────
-const PHYSIO_RULES: { keywords: string[]; minVal: number; maxVal: number; mmolFactor?: number; unit: string }[] = [
-  { keywords: ['glucosa', 'glucose', 'gluc'], minVal: 30, maxVal: 700, mmolFactor: 18.016, unit: 'mg/dL' },
-  { keywords: ['colesterol total', 'cholesterol total', 'colesterol'], minVal: 60, maxVal: 600, mmolFactor: 38.67, unit: 'mg/dL' },
-  { keywords: ['triglicérid', 'triglicer', 'triglyceri'], minVal: 20, maxVal: 5000, mmolFactor: 88.57, unit: 'mg/dL' },
-  { keywords: ['hdl', 'hdl-c', 'colesterol hdl', 'alta densidad'], minVal: 10, maxVal: 200, mmolFactor: 38.67, unit: 'mg/dL' },
-  { keywords: ['ldl', 'ldl-c', 'baja densidad'], minVal: 10, maxVal: 500, mmolFactor: 38.67, unit: 'mg/dL' },
-  { keywords: ['creatinina', 'creatinine'], minVal: 0.3, maxVal: 20, mmolFactor: 0.0113, unit: 'mg/dL' },
-  { keywords: ['urea'], minVal: 5, maxVal: 200, mmolFactor: 6.006, unit: 'mg/dL' },
-  { keywords: ['bilirrubina', 'bilirubin'], minVal: 0.1, maxVal: 30, mmolFactor: 0.0585, unit: 'mg/dL' },
-  { keywords: ['calcio', 'calcium'], minVal: 4, maxVal: 20, mmolFactor: 4.008, unit: 'mg/dL' },
-  { keywords: ['hemoglobina', 'hemoglobin', 'hgb', 'hb'], minVal: 5, maxVal: 25, unit: 'g/dL' },
-  { keywords: ['hematocrit', 'hematócrit'], minVal: 15, maxVal: 65, unit: '%' },
-];
-
-interface Biomarker { name: string; value: string; unit: string; referenceRange?: string; flag: string; system: string; }
-interface ValidationIssue { marker: string; type: string; originalValue: string; correctedValue?: string; note: string; }
-
-function validateAndNormalizeBiomarkers(biomarkers: Biomarker[]): { biomarkers: Biomarker[]; issues: ValidationIssue[] } {
-  const issues: ValidationIssue[] = [];
-  const normalized = biomarkers.map(bm => {
-    const nameLower = bm.name.toLowerCase();
-    const rule = PHYSIO_RULES.find(r => r.keywords.some(k => nameLower.includes(k)));
-    if (!rule) return bm;
-
-    const num = parseFloat(String(bm.value).replace(',', '.'));
-    if (isNaN(num)) return bm;
-
-    // Unit conversion: value below physiological min but converts correctly via mmolFactor
-    if (rule.mmolFactor && num < rule.minVal && num * rule.mmolFactor >= rule.minVal) {
-      const converted = Math.round(num * rule.mmolFactor * 100) / 100;
-      issues.push({
-        marker: bm.name,
-        type: 'unit_conversion',
-        originalValue: `${num} (posiblemente mmol/L)`,
-        correctedValue: `${converted} ${rule.unit}`,
-        note: `Valor ${num} convertido automáticamente de mmol/L a ${rule.unit} (${num} × ${rule.mmolFactor} = ${converted}).`,
-      });
-      return { ...bm, value: String(converted), unit: rule.unit };
-    }
-
-    // Physiologically impossible value
-    if (num < rule.minVal * 0.3 || num > rule.maxVal * 3) {
-      issues.push({
-        marker: bm.name,
-        type: 'implausible_value',
-        originalValue: String(num),
-        note: `Valor ${num} ${bm.unit} parece fisiológicamente imposible (rango esperado: ${rule.minVal}–${rule.maxVal} ${rule.unit}). Revisar manualmente.`,
-      });
-    }
-
-    return bm;
-  });
-
-  return { biomarkers: normalized, issues };
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+interface Biomarker {
+  name: string;
+  value: string;
+  unit: string;
+  referenceRange?: string;
+  flag: string;
+  system: string;
 }
 
+interface ConflictCandidate {
+  value: string;
+  unit: string;
+  flag: string;
+  system: string;
+  referenceRange?: string;
+  context: string;
+}
+
+interface MarkerConflict {
+  name: string;
+  candidates: ConflictCandidate[];
+  recommendedIndex: number;
+}
+
+interface ExtremeOutlier {
+  name: string;
+  value: string;
+  unit: string;
+  refMin: number | null;
+  refMax: number | null;
+  severity: 'warning' | 'critical';
+  factor: number;
+  description: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deduplication — groups by exact name, no hardcoded rules
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Groups biomarkers by name.
+ * - Identical value+unit across all occurrences → silently merge (true PDF page duplicate)
+ * - Different values → send to doctor for resolution (no auto-discard)
+ */
+function deduplicateBiomarkers(biomarkers: Biomarker[]): {
+  biomarkers: Biomarker[];
+  conflicts: MarkerConflict[];
+  autoRemoved: string[];
+} {
+  const seen = new Map<string, Biomarker[]>();
+
+  for (const bm of biomarkers) {
+    const key = bm.name.toLowerCase().trim();
+    if (!seen.has(key)) seen.set(key, []);
+    seen.get(key)!.push(bm);
+  }
+
+  const result: Biomarker[] = [];
+  const conflicts: MarkerConflict[] = [];
+  const autoRemoved: string[] = [];
+
+  for (const [, group] of seen) {
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+
+    // Check if all entries are identical (same value + same unit, modulo whitespace)
+    const normalize = (b: Biomarker) =>
+      `${String(b.value).trim().replace(',', '.')}|${b.unit?.trim().toLowerCase()}`;
+    const signatures = new Set(group.map(normalize));
+
+    if (signatures.size === 1) {
+      // Truly identical — the PDF just repeated the same data (header + detail page, etc.)
+      result.push(group[0]);
+      autoRemoved.push(
+        ...group.slice(1).map(b =>
+          `${b.name}: duplicado idéntico eliminado (${b.value} ${b.unit})`
+        )
+      );
+      continue;
+    }
+
+    // Different values — doctor must choose
+    // Use the entry with the most complete referenceRange as recommended
+    const sortedGroup = [...group].sort((a, b) => {
+      const aScore = (a.referenceRange && a.referenceRange.length > 2 ? 1 : 0);
+      const bScore = (b.referenceRange && b.referenceRange.length > 2 ? 1 : 0);
+      return bScore - aScore;
+    });
+
+    result.push(sortedGroup[0]); // tentative — overwritten when doctor confirms
+
+    conflicts.push({
+      name: group[0].name,
+      recommendedIndex: 0,
+      candidates: sortedGroup.map((b, i) => ({
+        value: b.value,
+        unit: b.unit,
+        flag: b.flag,
+        system: b.system,
+        referenceRange: b.referenceRange,
+        context: i === 0
+          ? (b.referenceRange && b.referenceRange.length > 2 ? 'Panel con rango de referencia (recomendado)' : 'Primera aparición en el documento')
+          : `Aparición adicional en el documento`,
+      })),
+    });
+  }
+
+  return { biomarkers: result, conflicts, autoRemoved };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Outlier detection — uses the document's OWN reference ranges
+// No hardcoded rules. Works for any lab, any country, any unit system.
+// ─────────────────────────────────────────────────────────────────────────────
+function parseReferenceRange(ref: string | undefined): { min: number | null; max: number | null } {
+  if (!ref) return { min: null, max: null };
+
+  // "X - Y" or "X – Y" or "X a Y"
+  const rangeMatch = ref.match(/([\d.,]+)\s*[-–a]\s*([\d.,]+)/);
+  if (rangeMatch) {
+    return {
+      min: parseFloat(rangeMatch[1].replace(',', '.')),
+      max: parseFloat(rangeMatch[2].replace(',', '.')),
+    };
+  }
+
+  // "< X" or "≤ X"
+  const ltMatch = ref.match(/[<≤]\s*=?\s*([\d.,]+)/);
+  if (ltMatch) return { min: null, max: parseFloat(ltMatch[1].replace(',', '.')) };
+
+  // "> X" or "≥ X"
+  const gtMatch = ref.match(/[>≥]\s*=?\s*([\d.,]+)/);
+  if (gtMatch) return { min: parseFloat(gtMatch[1].replace(',', '.')), max: null };
+
+  return { min: null, max: null };
+}
+
+function detectExtremeOutliers(biomarkers: Biomarker[]): ExtremeOutlier[] {
+  const outliers: ExtremeOutlier[] = [];
+
+  for (const bm of biomarkers) {
+    const num = parseFloat(String(bm.value).replace(',', '.'));
+    if (isNaN(num)) continue; // qualitative value — skip
+
+    const { min: refMin, max: refMax } = parseReferenceRange(bm.referenceRange);
+
+    // Need at least one bound to compare
+    if (refMax === null && refMin === null) continue;
+    // Skip if bounds are zero or negative (meaningless)
+    if (refMax !== null && refMax <= 0) continue;
+
+    // Too high: value > 3× the upper bound
+    if (refMax !== null && num > refMax * 3) {
+      const factor = Math.round((num / refMax) * 10) / 10;
+      outliers.push({
+        name: bm.name,
+        value: bm.value,
+        unit: bm.unit,
+        refMin,
+        refMax,
+        severity: num > refMax * 10 ? 'critical' : 'warning',
+        factor,
+        description: `${factor}× por encima del límite superior de referencia del laboratorio (${refMax} ${bm.unit})`,
+      });
+      continue;
+    }
+
+    // Too low: value < 10% of the lower bound (only when lower bound is meaningful, > 0)
+    if (refMin !== null && refMin > 0 && num < refMin * 0.1) {
+      const factor = Math.round((refMin / Math.max(num, 0.0001)) * 10) / 10;
+      outliers.push({
+        name: bm.name,
+        value: bm.value,
+        unit: bm.unit,
+        refMin,
+        refMax,
+        severity: num < refMin * 0.02 ? 'critical' : 'warning',
+        factor,
+        description: `${factor}× por debajo del límite inferior de referencia del laboratorio (${refMin} ${bm.unit})`,
+      });
+    }
+  }
+
+  return outliers;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Extraction prompt (module-level so the anonymization handler can use it)
+// ─────────────────────────────────────────────────────────────────────────────
+const prompt = `Eres el motor de extracción de datos del Protocolo de Diagnóstico Integral (PDI).
+Tu misión: extraer con precisión absoluta todos los biomarcadores de este resultado de laboratorio.
+
+════════════════════════════════════════════════════════
+PASO 1 — ENTIENDE LA ESTRUCTURA DEL DOCUMENTO
+════════════════════════════════════════════════════════
+Los laboratorios clínicos pueden tener formatos muy distintos:
+• Tablas con columnas separadas: Nombre | Resultado | Unidad | Referencia
+• Tablas con columnas de estado: Nombre | Bajo(LR) | Dentro(LR) | Alto(LR) | Límites de referencia
+• Formato lineal: "Glucosa: 91 mg/dL (Ref: 55-99)"
+• PDFs internacionales con distintas convenciones de unidades
+
+⚠️ REGLA CRÍTICA PARA TABLAS MULTI-COLUMNA (ej. Laboratorios Chopo, México):
+Las columnas "Bajo (LR)", "Dentro (LR)", "Sobre (LR)" contienen el VALOR DEL PACIENTE.
+La columna "Límites de referencia" contiene rangos poblacionales — NO son el valor del paciente.
+El valor del paciente aparece en UNA SOLA de esas tres columnas (la que corresponde a su estado).
+NUNCA combines números de diferentes columnas de la misma fila.
+
+Ejemplo de tabla Chopo:
+  Prueba          | Bajo (LR) | Dentro (LR) | Sobre (LR) | Límites de referencia
+  Colesterol HDL  |           |     51      |            | 40 - 60 mg/dL
+→ CORRECTO: valor=51, referencia="40 - 60 mg/dL"
+→ INCORRECTO: valor=1972 o valor=4060 (no combines columnas)
+
+════════════════════════════════════════════════════════
+PASO 2 — REGLAS DE EXTRACCIÓN
+════════════════════════════════════════════════════════
+✅ Extrae TODOS los marcadores de TODAS las secciones del documento.
+✅ Si el mismo nombre aparece en múltiples secciones con valores diferentes → extráelo de cada sección (el sistema detectará el conflicto y preguntará al médico).
+✅ Valores cualitativos ("Negativo", "Ausente", "Reactivo", "Positivo") son válidos — extráelos tal cual.
+✅ El referenceRange debe incluir la unidad: "40 - 60 mg/dL", "< 200 mg/dL", "> 60 mL/min".
+
+❌ NO extraigas: encabezados de sección, notas metodológicas, pie de página del laboratorio,
+   nombres del médico, datos del paciente, ni texto legal/administrativo.
+❌ NO inventes valores ni rangos que no están en el documento.
+
+════════════════════════════════════════════════════════
+PASO 3 — NORMALIZACIÓN DE UNIDADES
+════════════════════════════════════════════════════════
+El documento puede usar distintas unidades. Conviértelas a la unidad estándar clínica:
+
+• Glucosa: si en mmol/L → multiplica × 18.016 → reporta en mg/dL
+  Ejemplo: 5.05 mmol/L × 18.016 = 91 mg/dL
+• Colesterol/HDL/LDL: si en mmol/L → × 38.67 → mg/dL
+• Triglicéridos: si en mmol/L → × 88.57 → mg/dL
+• Creatinina: si en µmol/L → ÷ 88.4 → mg/dL
+• Bilirrubina: si en µmol/L → × 0.0585 → mg/dL
+• Calcio: si en mmol/L → × 4.008 → mg/dL
+• Hemoglobina: si en g/L → ÷ 10 → g/dL
+• T3 total (Triiodotironina): unidad estándar = ng/mL, rango típico 0.8-2.0
+• T4 total (Tiroxina): unidad estándar = µg/dL, rango típico 5-14
+• T4 libre: unidad estándar = ng/dL, rango típico 0.8-1.8
+• T3 libre: unidad estándar = pg/mL, rango típico 2.3-4.2
+• TSH: unidad estándar = mUI/L o µUI/mL (equivalentes), rango típico 0.4-4.0
+• Vitamina B12: si en pmol/L → × 1.355 → pg/mL
+• Folato: si en nmol/L → × 0.441 → ng/mL
+
+Si el documento ya usa la unidad estándar, NO conviertas — reporta exactamente lo que dice.
+Incluye la unidad correcta en el campo "unit".
+
+════════════════════════════════════════════════════════
+PASO 4 — VERIFICACIÓN ANTES DE REPORTAR
+════════════════════════════════════════════════════════
+Revisa cada valor contra rangos de supervivencia humana (valores completamente imposibles en un paciente vivo):
+Si el valor viola estos rangos, es probable un error de parseo — revisa y corrige:
+- Glucosa: 20-1200 mg/dL       - Colesterol total: 50-900 mg/dL
+- HDL: 5-200 mg/dL             - LDL: 5-600 mg/dL
+- Hemoglobina: 3-25 g/dL       - Sodio: 100-180 mEq/L
+- Potasio: 1.5-9.0 mEq/L       - Creatinina: 0.1-30 mg/dL
+- T3: 0.1-8 ng/mL              - T4: 0.5-30 µg/dL
+- TSH: 0.001-200 mUI/L         - HbA1c: 2-20 %
+
+════════════════════════════════════════════════════════
+PASO 5 — CLASIFICACIÓN EN SISTEMA PDI
+════════════════════════════════════════════════════════
+Para el campo "system", elige el más apropiado:
+"Fundamentos y Resumen Ejecutivo" | "Sistema Metabólico y Energético" | "Salud Cardiovascular y Circulatoria" | "Sistema Endocrino (Hormonal)" | "Función Digestiva y Microbiota" | "Sistema Inmune e Inflamación" | "Salud Neurológica y Cognitiva" | "Salud Dental y Estomatognática" | "Salud Visual y Retinografía" | "Salud Dermatológica e Integumentaria" | "Sistemas Renal, Respiratorio y Osteomuscular" | "Desintoxicación y Estrés Oxidativo" | "Protocolo Maestro de Intervención" | "Anexos y Glosario"
+
+════════════════════════════════════════════════════════
+FORMATO DE RESPUESTA
+════════════════════════════════════════════════════════
+Devuelve ÚNICAMENTE un JSON válido, sin markdown, sin texto adicional:
+{
+  "exam_date": "YYYY-MM-DD",
+  "biomarkers": [
+    {
+      "name": "Nombre exacto del marcador",
+      "value": "valor numérico o cualitativo como string",
+      "unit": "unidad post-conversión",
+      "referenceRange": "rango del documento incluyendo unidad",
+      "flag": "Normal|Alto|Bajo",
+      "system": "sistema PDI correspondiente"
+    }
+  ],
+  "summary": "Resumen clínico ejecutivo en 2-3 oraciones para el médico tratante."
+}
+
+Fecha del examen: busca la fecha de REALIZACIÓN del estudio (no la de entrega). Formato ISO YYYY-MM-DD. Si no la encuentras, usa null.`;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST handler
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
-    const { base64, mimeType } = await req.json();
+    const { base64, mimeType, patientName } = await req.json();
 
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json({ error: 'Falta GEMINI_API_KEY en variables de entorno' }, { status: 500 });
     }
 
+    // ── Step 0: Anonymize PDF before sending to Google ────────────────────────
+    // For PDFs with a text layer, we extract the text, redact the patient name,
+    // and send sanitized text to Gemini. For scanned/image PDFs (no text layer)
+    // we fall back to binary but document in the audit log.
+    let anonymized = false;
+    let anonymizationFailed = false;
+    let geminiContent: any[];
+
+    const isPDF = mimeType === 'application/pdf';
+
+    if (isPDF && patientName?.trim()) {
+      try {
+        // Dynamic require for pdf-parse (CJS-only package in server context)
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+        const pdfBuffer = Buffer.from(base64, 'base64');
+        const pdfData = await pdfParse(pdfBuffer);
+        const rawText = pdfData.text ?? '';
+
+        if (rawText.trim().length > 80) {
+          // PDF has a usable text layer — sanitize it
+          const nameTokens = patientName
+            .trim()
+            .split(/\s+/)
+            .filter((t: string) => t.length > 2)
+            .map((t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+          let sanitizedText = rawText;
+          // Replace full name (all orderings), individual tokens, and ALL-CAPS variants
+          const patterns = [
+            patientName.trim(),
+            patientName.trim().toUpperCase(),
+            ...nameTokens,
+            ...nameTokens.map((t: string) => t.toUpperCase()),
+          ];
+          for (const p of patterns) {
+            if (p.length > 2) {
+              sanitizedText = sanitizedText.replace(
+                new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+                '[PACIENTE]'
+              );
+            }
+          }
+
+          anonymized = true;
+          geminiContent = [
+            prompt,
+            `\n\nCONTENIDO DEL LABORATORIO (texto extraído del PDF, datos del paciente anonimizados):\n${sanitizedText}`,
+          ];
+        } else {
+          // Scanned PDF — no text layer, must send binary
+          anonymizationFailed = true;
+          geminiContent = [prompt, { inlineData: { data: base64, mimeType } }];
+        }
+      } catch {
+        // pdf-parse error — fall back to binary
+        anonymizationFailed = true;
+        geminiContent = [prompt, { inlineData: { data: base64, mimeType } }];
+      }
+    } else {
+      // Image file (JPG/PNG) or no patient name provided — send binary as-is
+      anonymizationFailed = isPDF && !patientName?.trim();
+      geminiContent = [prompt, { inlineData: { data: base64, mimeType } }];
+    }
+
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+    // gemini-2.5-pro: best PDF table comprehension available
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
-    const prompt = `Eres el motor de análisis del Protocolo de Diagnóstico Integral (PDI), un sistema médico de élite con capacidad de lectura clínica avanzada.
+    const extractResult = await model.generateContent(geminiContent);
 
-PASO 1 — Comprende la estructura del documento:
-Identifica qué columnas existen. Los laboratorios tienen:
-- Columna RESULTADO/VALOR: el dato MEDIDO en este paciente
-- Columna VALORES DE REFERENCIA/RANGO NORMAL: rangos esperados para la población
-
-PASO 2 — Identifica valor del paciente vs referencia:
-El VALOR DEL PACIENTE es único por marcador y es la medición de esa muestra.
-Los VALORES DE REFERENCIA son rangos con umbrales numéricos (Normal, Alto, Deseable, etc.).
-
-PASO 3 — Reglas de extracción:
-✅ Extrae UNA entrada por marcador con el valor MEDIDO del paciente.
-✅ Consolida la tabla de referencia en UN string legible (ej: "< 150 mg/dL", "74 - 106").
-✅ El valor del paciente está en la MISMA LÍNEA que el nombre del marcador.
-✅ Líneas "FCSI" son conversiones del laboratorio — IGNORAR COMPLETAMENTE.
-❌ No extraigas filas de referencia como marcadores individuales.
-❌ No extraigas notas metodológicas ni cálculos intermedios irrelevantes.
-
-PASO 4 — NORMALIZACIÓN DE UNIDADES (CRÍTICO — LEE CON ATENCIÓN):
-Los laboratorios pueden usar distintas unidades. SIEMPRE reporta en las unidades estándar en México:
-
-⚠️ GLUCOSA: Rango normal en mg/dL es 70–100. Si ves un valor como 4.5, 5.05, 6.2 con unidad mmol/L:
-   → MULTIPLICA por 18.016 para convertir a mg/dL
-   → 5.05 mmol/L × 18.016 = 91.0 mg/dL ← esto es lo que debes reportar
-   → NUNCA reportes glucosa como 5.05 mg/dL (eso sería glucemia de coma hipoglucémico)
-
-⚠️ COLESTEROL/HDL/LDL: Si en mmol/L → multiplicar por 38.67 para mg/dL
-   → 5.18 mmol/L × 38.67 = 200.3 mg/dL
-
-⚠️ TRIGLICÉRIDOS: Si en mmol/L → multiplicar por 88.57 para mg/dL
-   → 1.69 mmol/L × 88.57 = 149.7 mg/dL
-
-⚠️ CREATININA: Si en μmol/L → dividir por 88.4 para mg/dL
-   → 88 μmol/L ÷ 88.4 = 1.00 mg/dL
-
-⚠️ BILIRRUBINA: Si en μmol/L → multiplicar por 0.0585 para mg/dL
-
-⚠️ CALCIO: Si en mmol/L → multiplicar por 4.008 para mg/dL
-
-La unit en el JSON DEBE coincidir con el valor post-conversión.
-
-PASO 5 — VERIFICACIÓN FISIOLÓGICA:
-Antes de devolver el JSON, verifica que cada valor sea posible en un paciente vivo:
-- Glucosa (mg/dL): 40–700. Si es < 40, es error de unidades.
-- Colesterol total (mg/dL): 60–600
-- Triglicéridos (mg/dL): 20–2000
-- HDL/LDL (mg/dL): 10–300
-- Hemoglobina (g/dL): 5–25
-- Creatinina (mg/dL): 0.3–20
-Si un valor no pasa esta verificación, revisa las unidades antes de reportarlo.
-
-PASO 6 — Para cada biomarcador extrae:
-- name: nombre clínico limpio
-- value: valor numérico exacto POST-normalización de unidades
-- unit: unidad de medida POST-conversión
-- referenceRange: resumen del rango de referencia en una expresión clara
-- flag: "Normal", "Alto" o "Bajo" (comparando el valor normalizado vs rangos del documento)
-- system: uno de estos 14 sistemas:
-  1. "Fundamentos y Resumen Ejecutivo"
-  2. "Sistema Metabólico y Energético"
-  3. "Salud Cardiovascular y Circulatoria"
-  4. "Sistema Endocrino (Hormonal)"
-  5. "Función Digestiva y Microbiota"
-  6. "Sistema Inmune e Inflamación"
-  7. "Salud Neurológica y Cognitiva"
-  8. "Salud Dental y Estomatognática"
-  9. "Salud Visual y Retinografía"
-  10. "Salud Dermatológica e Integumentaria"
-  11. "Sistemas Renal, Respiratorio y Osteomuscular"
-  12. "Desintoxicación y Estrés Oxidativo"
-  13. "Protocolo Maestro de Intervención"
-  14. "Anexos y Glosario"
-
-PASO 7 — Fecha del examen:
-Busca la fecha de realización (no entrega). Formato ISO: YYYY-MM-DD. Null si no encontrada.
-
-Devuelve ESTRICTAMENTE un JSON válido sin bloques markdown:
-{
-  "exam_date": "2024-03-15",
-  "biomarkers": [
-    { "name": "Glucosa", "value": "91.0", "unit": "mg/dL", "referenceRange": "74 - 106", "flag": "Normal", "system": "Sistema Metabólico y Energético" }
-  ],
-  "summary": "Resumen clínico ejecutivo para el médico tratante."
-}`;
-
-    const result = await model.generateContent([
-      prompt,
-      { inlineData: { data: base64, mimeType: mimeType } }
-    ]);
-
-    const text = result.response.text();
+    const extractText = extractResult.response.text();
     let parsedData: any = null;
     try {
-      const cleanText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-      parsedData = JSON.parse(cleanText);
-    } catch (e) {
-      console.error("Error parsing JSON:", text);
-      return NextResponse.json({ error: 'Error al interpretar la respuesta de la IA' }, { status: 500 });
+      const clean = extractText.replace(/```json/gi, '').replace(/```/g, '').trim();
+      parsedData = JSON.parse(clean);
+    } catch {
+      console.error('JSON parse error:', extractText);
+      return NextResponse.json({ error: 'Error al interpretar la respuesta de la IA. Por favor intenta de nuevo.' }, { status: 500 });
     }
 
-    // ── Server-side physiological validation & unit normalization ──────────────
-    const { biomarkers: validatedBiomarkers, issues: validationIssues } = validateAndNormalizeBiomarkers(parsedData.biomarkers ?? []);
-    parsedData.biomarkers = validatedBiomarkers;
+    // ── Step 2: Deduplication (structure-aware, no hardcoded rules) ───────────
+    const { biomarkers: dedupedBiomarkers, conflicts, autoRemoved } = deduplicateBiomarkers(
+      parsedData.biomarkers ?? []
+    );
+    parsedData.biomarkers = dedupedBiomarkers;
 
-    // ── AI Audit: second pass to verify extraction quality ─────────────────────
-    const auditPrompt = `Eres el auditor de calidad médica del sistema PDI.
-Se te proporciona el documento de laboratorio original Y los datos ya extraídos y normalizados.
+    // ── Step 3: Outlier detection (uses document's own reference ranges) ──────
+    const extremeOutliers = detectExtremeOutliers(parsedData.biomarkers);
 
-DATOS EXTRAÍDOS (post-normalización):
-${JSON.stringify(parsedData.biomarkers, null, 2)}
+    // ── Step 4: Build result summary (no extra AI call needed) ───────────────
+    const msgs: string[] = [];
+    if (anonymized) msgs.push('✅ Nombre del paciente anonimizado antes de enviarse a Google');
+    if (anonymizationFailed) msgs.push('⚠️ PDF escaneado: no fue posible anonimizar el nombre antes del envío');
+    if (autoRemoved.length > 0) msgs.push(`${autoRemoved.length} duplicado(s) idéntico(s) eliminado(s)`);
+    if (conflicts.length > 0) msgs.push(`${conflicts.length} conflicto(s) requieren revisión médica`);
+    if (extremeOutliers.length > 0) msgs.push(`${extremeOutliers.length} valor(es) extremo(s) detectado(s)`);
 
-INSTRUCCIONES:
-1. Verifica que cada valor coincida con el documento (considerando conversiones de unidades ya aplicadas)
-2. Verifica que el FLAG (Normal/Alto/Bajo) sea correcto
-3. Detecta marcadores importantes omitidos
-4. Detecta valores todavía fisiológicamente imposibles
-5. Detecta nombres de marcadores incorrectos
+    const audit = {
+      confidence: conflicts.length > 0 || extremeOutliers.length > 0 ? 80 : 95,
+      status: conflicts.length > 0 || extremeOutliers.length > 0 ? 'warning' : 'ok',
+      issues: [],
+      missing_markers: [],
+      summary: msgs.length > 0 ? msgs.join('. ') + '.' : 'Extracción completada sin conflictos.',
+      anonymized,
+      anonymizationFailed,
+    };
 
-JSON de respuesta (sin markdown):
-{
-  "confidence": <0-100>,
-  "status": "<ok|warning|error>",
-  "issues": [
-    { "marker": "<nombre>", "type": "<wrong_value|wrong_flag|wrong_unit|unit_conversion|implausible|wrong_name|missing>", "extracted": "<valor extraído>", "corrected": "<valor correcto>", "note": "<descripción>" }
-  ],
-  "missing_markers": ["<marcador omitido>"],
-  "summary": "<resumen en 1-2 oraciones>"
-}
-Criterios: ok=confidence≥90 sin issues críticos; warning=70-89 o 1-2 issues; error=<70 o valores imposibles`;
-
-    let audit: any = { confidence: 100, status: 'ok', issues: [], missing_markers: [], summary: 'Auditoría completada.' };
-    try {
-      const auditResult = await model.generateContent([
-        auditPrompt,
-        { inlineData: { data: base64, mimeType: mimeType } }
-      ]);
-      const auditText = auditResult.response.text().replace(/```json/gi, '').replace(/```/g, '').trim();
-      audit = JSON.parse(auditText);
-    } catch (e) {
-      console.warn('Audit failed silently:', e);
-    }
-
-    // Merge server-side validation issues into audit report
-    if (validationIssues.length > 0) {
-      audit.issues = [...(audit.issues ?? []), ...validationIssues];
-      if (audit.status === 'ok') audit.status = 'warning';
-      audit.summary = `${validationIssues.length} corrección(es) de unidades aplicada(s) automáticamente. ${audit.summary ?? ''}`;
-    }
-
-    return NextResponse.json({ ...parsedData, audit });
+    return NextResponse.json({
+      ...parsedData,
+      audit,
+      conflicts,
+      extremeOutliers,
+      suspiciousMarkers: [],
+      deduplicationLog: autoRemoved,
+    });
 
   } catch (error: any) {
-    console.error("AI Error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('Analyze API error:', error);
+    return NextResponse.json({ error: error.message ?? 'Error interno' }, { status: 500 });
   }
 }
+

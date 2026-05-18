@@ -501,6 +501,7 @@ export async function generateWordReport(
   studies: any[] = [],
   m6Markers: string[] = [],
   m6Groups: Array<{ id: string; markers: string[]; chartImages?: { marker: string; pngBase64: string }[] }> = [],
+  latestBiomarkers: any[] = [],
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
   const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
@@ -574,6 +575,101 @@ export async function generateWordReport(
     if (num !== approvedNums[approvedNums.length - 1]) {
       children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
     }
+  }
+
+  // ── Tabla Maestra de Biomarcadores ──────────────────────────────────────────
+  if (latestBiomarkers.length > 0) {
+    children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
+
+    // Section header
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: noBorder(),
+      rows: [new TableRow({
+        children: [new TableCell({
+          shading: shading('1E293B'),
+          borders: noBorder(),
+          margins: { top: 160, bottom: 160, left: 320, right: 320 },
+          children: [new Paragraph({
+            children: [
+              run('ANEXO', { size: 18, color: C.gold, bold: true }),
+              run('  ·  ', { size: 18, color: '94A3B8' }),
+              run('Tabla Maestra de Biomarcadores', { size: 28, color: C.white, bold: true }),
+            ],
+          })],
+        })],
+      })],
+    }));
+    children.push(spacer(2));
+
+    // Stats row
+    const alteredCount = latestBiomarkers.filter((b: any) => b.flag !== 'Normal').length;
+    const normalCount = latestBiomarkers.length - alteredCount;
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: noBorder(),
+      rows: [new TableRow({
+        children: [
+          new TableCell({ width: { size: 33, type: WidthType.PERCENTAGE }, shading: shading(C.greenLight), borders: colorBorder(C.green, 4), margins: { top: 100, bottom: 100, left: 200, right: 200 }, children: [new Paragraph({ children: [run(`${normalCount}`, { size: 40, bold: true, color: C.green })], spacing: { before: 0, after: 40 }, alignment: AlignmentType.CENTER }), new Paragraph({ children: [run('En rango normal', { size: 16, color: C.gray700, bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 } })] }),
+          new TableCell({ width: { size: 33, type: WidthType.PERCENTAGE }, shading: shading(C.redLight), borders: colorBorder(C.red, 4), margins: { top: 100, bottom: 100, left: 200, right: 200 }, children: [new Paragraph({ children: [run(`${alteredCount}`, { size: 40, bold: true, color: C.red })], spacing: { before: 0, after: 40 }, alignment: AlignmentType.CENTER }), new Paragraph({ children: [run('Fuera de rango', { size: 16, color: C.gray700, bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 } })] }),
+          new TableCell({ width: { size: 33, type: WidthType.PERCENTAGE }, shading: shading('F8FAFC'), borders: colorBorder('E2E8F0', 4), margins: { top: 100, bottom: 100, left: 200, right: 200 }, children: [new Paragraph({ children: [run(`${latestBiomarkers.length}`, { size: 40, bold: true, color: C.gray900 })], spacing: { before: 0, after: 40 }, alignment: AlignmentType.CENTER }), new Paragraph({ children: [run('Total analizado', { size: 16, color: C.gray700, bold: true })], alignment: AlignmentType.CENTER, spacing: { before: 0, after: 0 } })] }),
+        ],
+      })],
+    }));
+    children.push(spacer(2));
+
+    // Group by system
+    const bySystem: Record<string, any[]> = {};
+    for (const bm of latestBiomarkers) {
+      const sys = (bm as any).system ?? 'Otros';
+      if (!bySystem[sys]) bySystem[sys] = [];
+      bySystem[sys].push(bm);
+    }
+
+    const headerRow = new TableRow({
+      tableHeader: true,
+      children: [
+        new TableCell({ shading: shading('1E293B'), borders: noBorder(), width: { size: 45, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 160, right: 80 }, children: [new Paragraph({ children: [run('BIOMARCADOR', { size: 16, bold: true, color: '94A3B8' })], spacing: { before: 0, after: 0 } })] }),
+        new TableCell({ shading: shading('1E293B'), borders: noBorder(), width: { size: 15, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 80, right: 80 }, children: [new Paragraph({ children: [run('VALOR', { size: 16, bold: true, color: '94A3B8' })], alignment: AlignmentType.RIGHT, spacing: { before: 0, after: 0 } })] }),
+        new TableCell({ shading: shading('1E293B'), borders: noBorder(), width: { size: 12, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 80, right: 80 }, children: [new Paragraph({ children: [run('UNIDAD', { size: 16, bold: true, color: '94A3B8' })], spacing: { before: 0, after: 0 } })] }),
+        new TableCell({ shading: shading('1E293B'), borders: noBorder(), width: { size: 28, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 80, right: 160 }, children: [new Paragraph({ children: [run('REFERENCIA', { size: 16, bold: true, color: '94A3B8' })], alignment: AlignmentType.RIGHT, spacing: { before: 0, after: 0 } })] }),
+      ],
+    });
+
+    const dataRows: TableRow[] = [headerRow];
+
+    for (const [sysName, bms] of Object.entries(bySystem).sort(([a], [b]) => a.localeCompare(b))) {
+      dataRows.push(new TableRow({
+        children: [new TableCell({
+          columnSpan: 4,
+          shading: shading('F1F5F9'),
+          borders: { ...noBorder(), bottom: { style: BorderStyle.SINGLE, size: 8, color: 'E2E8F0' } },
+          margins: { top: 80, bottom: 80, left: 160, right: 160 },
+          children: [new Paragraph({ children: [run(sysName.toUpperCase(), { size: 16, bold: true, color: '475569' })], spacing: { before: 0, after: 0 } })],
+        })],
+      }));
+
+      const sorted = [...bms].sort((a: any, b: any) => (a.flag !== 'Normal' ? -1 : 1));
+      for (const bm of sorted as any[]) {
+        const isAltered = bm.flag !== 'Normal';
+        const fColor = bm.flag === 'Alto' ? C.red : bm.flag === 'Bajo' ? '1D4ED8' : C.green;
+        const bgColor = bm.flag === 'Alto' ? 'FEF2F2' : bm.flag === 'Bajo' ? 'EFF6FF' : 'FFFFFF';
+        dataRows.push(new TableRow({
+          children: [
+            new TableCell({ shading: shading(bgColor), borders: noBorder(), width: { size: 45, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 160, right: 80 }, children: [new Paragraph({ children: [run(bm.name, { size: 20, bold: isAltered, color: isAltered ? fColor : C.gray700 })], spacing: { before: 0, after: 0 } })] }),
+            new TableCell({ shading: shading(bgColor), borders: noBorder(), width: { size: 15, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 80, right: 80 }, children: [new Paragraph({ children: [run(String(bm.value), { size: 22, bold: isAltered, color: isAltered ? fColor : C.gray900 })], alignment: AlignmentType.RIGHT, spacing: { before: 0, after: 0 } })] }),
+            new TableCell({ shading: shading(bgColor), borders: noBorder(), width: { size: 12, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 80, right: 80 }, children: [new Paragraph({ children: [run(bm.unit ?? '', { size: 18, color: '9CA3AF' })], spacing: { before: 0, after: 0 } })] }),
+            new TableCell({ shading: shading(bgColor), borders: noBorder(), width: { size: 28, type: WidthType.PERCENTAGE }, margins: { top: 60, bottom: 60, left: 80, right: 160 }, children: [new Paragraph({ children: [run(bm.referenceRange ?? '—', { size: 18, color: '6B7280' })], alignment: AlignmentType.RIGHT, spacing: { before: 0, after: 0 } })] }),
+          ],
+        }));
+      }
+    }
+
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: colorBorder('E2E8F0', 4),
+      rows: dataRows,
+    }));
   }
 
   // ── Evolution charts section (all studies, after all modules) ─────────────

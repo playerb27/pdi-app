@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { X, Edit2, Check, ChevronLeft, ChevronRight } from 'lucide-react';
-import { updateBiomarker } from '@/lib/api';
+import { updateBiomarker, deleteBiomarker } from '@/lib/api';
 
 export interface ChartPoint {
   date: string;
@@ -40,7 +40,7 @@ interface Props {
 }
 
 export default function ExpandedChartModal({ series, onClose, onValueUpdated }: Props) {
-  const [points, setPoints] = useState<ChartPoint[]>(series.points);
+  const [points, setPoints] = useState<ChartPoint[]>(series.points.filter(p => p.flag !== 'Excluido'));
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
   const [editFlag, setEditFlag] = useState('');
@@ -83,7 +83,6 @@ export default function ExpandedChartModal({ series, onClose, onValueUpdated }: 
     if (editIdx === null) return;
     const pt = points[editIdx];
     if (!pt.biomarkerId) {
-      // Update only locally
       setPoints(prev => prev.map((p, i) => i === editIdx ? { ...p, value: parseFloat(editVal) || p.value, flag: editFlag } : p));
       setEditIdx(null);
       return;
@@ -93,6 +92,34 @@ export default function ExpandedChartModal({ series, onClose, onValueUpdated }: 
     const updated = points.map((p, i) => i === editIdx ? { ...p, value: parseFloat(editVal) || p.value, flag: editFlag } : p);
     setPoints(updated);
     onValueUpdated?.(pt.biomarkerId, editVal, editFlag, pt.studyId ?? '');
+    setSaving(false);
+    setEditIdx(null);
+  };
+
+  const handleExclude = async () => {
+    if (editIdx === null) return;
+    const pt = points[editIdx];
+
+    if (!pt.biomarkerId) {
+      alert('Este punto no tiene ID en la base de datos.\nEdita su valor manualmente o elimina el estudio completo.');
+      setEditIdx(null);
+      return;
+    }
+
+    setSaving(true);
+    // DELETE the row from Supabase — the only approach that guarantees
+    // the point never reappears on page reload.
+    const ok = await deleteBiomarker(pt.biomarkerId);
+
+    if (!ok) {
+      alert('No se pudo eliminar de la base de datos. El punto sigue activo.');
+      setSaving(false);
+      return;
+    }
+
+    // Confirmed deleted — remove from local view and notify parent
+    setPoints(prev => prev.filter((_, i) => i !== editIdx));
+    onValueUpdated?.(pt.biomarkerId, String(pt.value), 'Excluido', pt.studyId ?? '');
     setSaving(false);
     setEditIdx(null);
   };
@@ -234,8 +261,16 @@ export default function ExpandedChartModal({ series, onClose, onValueUpdated }: 
                 <button key={f} onClick={() => setEditFlag(f)} style={{ padding: '6px 14px', borderRadius: '8px', border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'rgba(255,255,255,0.15)'}`, background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)') : 'transparent', color: editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>{f}</button>
               ))}
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button onClick={() => setEditIdx(null)} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px' }}>Cancelar</button>
+              <button
+                onClick={handleExclude}
+                disabled={saving}
+                title="El valor se guarda en la base de datos pero ya no aparece en la gráfica"
+                style={{ padding: '8px 16px', background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.4)', borderRadius: '8px', color: '#f97316', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}
+              >
+                {saving ? '...' : '◇ No graficar'}
+              </button>
               <button onClick={handleSave} disabled={saving} style={{ padding: '8px 20px', background: 'var(--gold-primary)', border: 'none', borderRadius: '8px', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 800 }}>
                 {saving ? '...' : 'Guardar'}
               </button>

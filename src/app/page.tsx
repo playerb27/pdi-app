@@ -255,8 +255,8 @@ export default function Dashboard() {
         </div>
         <div className="card">
           <h3 style={styles.cardTitle}>Manuales Generados</h3>
-          <p style={styles.statValue}>0</p>
-          <p style={styles.statSub}>Histórico total</p>
+          <p style={styles.statValue}>{Object.values(progress).reduce((acc, p) => acc + p.reportGenerated, 0)}</p>
+          <p style={styles.statSub}>Módulos generados en total</p>
         </div>
         <div className="card">
           <h3 style={styles.cardTitle}>Alertas Rojas Activas</h3>

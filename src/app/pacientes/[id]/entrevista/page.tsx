@@ -265,7 +265,47 @@ export default function EntrevistaPage({ params }: { params: Promise<{ id: strin
               );
             })}
           </div>
-        </div>
+
+          {/* ── Doctor Notes per Section ── */}
+          {(() => {
+            const notesKey = `notes_s${section.num}`;
+            const notesVal = answers[notesKey] ?? '';
+            return (
+              <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '16px' }}>📋</span>
+                  <div>
+                    <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: 'var(--gold-primary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Observaciones Clínicas del Médico</p>
+                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>Hallazgos, impresiones o notas adicionales sobre este sistema</p>
+                  </div>
+                  {notesVal && <span style={{ marginLeft: 'auto', fontSize: '10px', padding: '2px 8px', borderRadius: '99px', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontWeight: 700 }}>✓ Guardado</span>}
+                </div>
+                <textarea
+                  value={notesVal}
+                  onChange={e => handleAnswer(notesKey, e.target.value)}
+                  onBlur={e => upsertInterviewAnswer(id, notesKey, e.target.value)}
+                  rows={4}
+                  placeholder={`Anota aquí tus observaciones clínicas sobre ${section.title}...\nEjemplo: paciente refiere síntomas atípicos, hallazgos al examen físico, sospecha diagnóstica, etc.`}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    borderRadius: '10px',
+                    border: `1px solid ${notesVal ? 'rgba(212,175,55,0.4)' : 'var(--border-subtle)'}`,
+                    background: notesVal ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
+                    color: 'var(--text-primary)',
+                    fontFamily: 'var(--font-main)',
+                    fontSize: '14px',
+                    lineHeight: '1.6',
+                    resize: 'vertical',
+                    boxSizing: 'border-box',
+                    transition: 'border-color 0.2s, background 0.2s',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+            );
+          })()}
+        </div>{/* end section card */}
 
         {/* ── Navigation ── */}
         <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '48px' }}>

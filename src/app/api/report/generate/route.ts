@@ -77,9 +77,20 @@ function buildPrompt(
   const historialText = buildLongitudinalView();
 
 
-  // Clean interview text — remove sXqY IDs, show only answer content
+  // Separate doctor notes (notes_s1..s14) from patient answers
+  const doctorNotesEntries = Object.entries(interviewAnswers)
+    .filter(([k, v]) => k.startsWith('notes_s') && v && v.trim());
+
+  const doctorNotesText = doctorNotesEntries.length > 0
+    ? doctorNotesEntries.map(([k, v]) => {
+        const sNum = k.replace('notes_s', '');
+        return `• [Sistema ${sNum}]: ${v.trim()}`;
+      }).join('\n')
+    : '';
+
+  // Clean interview text — remove sXqY IDs and notes keys, show only answer content
   const interviewText = Object.entries(interviewAnswers)
-    .filter(([, v]) => v && v.trim())
+    .filter(([k, v]) => !k.startsWith('notes_s') && v && v.trim())
     .map(([, v]) => '• ' + v.replace(/\|\|/g, ', '))
     .join('\n');
 
@@ -131,8 +142,11 @@ Genera el **MÓDULO 1 — PERFIL INTEGRAL DEL PACIENTE** del reporte médico.
 
 ${base}
 
-DATOS DE LA ENTREVISTA CLÍNICA:
+DATOS DE LA ENTREVISTA CLÍNICA (respuestas del paciente):
 ${interviewText}
+${doctorNotesText ? `
+OBSERVACIONES CLÍNICAS DEL MÉDICO (notas del exploración física y evaluación clínica directa):
+${doctorNotesText}` : ''}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 ## 1. Datos Generales
@@ -141,7 +155,7 @@ ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 ## 4. Antecedentes Personales Patológicos
 ## 5. Medicamentos y Suplementos Actuales
 ## 6. Perfil de Riesgo Familiar Consolidado
-## 7. Impresión Clínica Inicial
+## 7. Impresión Clínica Inicial (integra las observaciones del médico si las hay)
 
 Sé exhaustivo con la información disponible. No inventes datos, usa solo lo que está en la entrevista.`;
 
@@ -204,13 +218,18 @@ ${alteredBiomarkers.length > 0
 HISTORIAL LONGITUDINAL (${allStudies.length} estudios — incluye biomarcadores que ya mejoraron):
 ${historialText}
 
-RESPUESTAS DE ENTREVISTA CLÍNICA:
+RESPUESTAS DE ENTREVISTA CLÍNICA (voz del paciente):
 ${interviewText}
+${doctorNotesText ? `
+OBSERVACIONES CLÍNICAS DEL MÉDICO (hallazgos directos, alta prioridad diagnóstica):
+${doctorNotesText}
+` : ''}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 Para cada sistema con síntomas O laboratorio alterado (actual O histórico):
 ### [Sistema]
 - **Síntomas reportados**: (de la entrevista, sin mencionar códigos de pregunta)
+- **Observación médica**: (si el médico anotó algo para este sistema, incorpóralo explícitamente)
 - **Hallazgos de laboratorio**: (valores actuales relevantes; si hubo alteraciones pasadas que ya mejoraron, mencionarlas brevemente como "previamente alterado, actualmente en recuperación ↘ mejorando")
 - **Correlación clínica**: análisis de cómo los síntomas y los labs se explican mutuamente
 - **Nivel de preocupación**: 🔴 Alto / 🟡 Moderado / 🟢 Bajo (mejorando) — con justificación de 1 línea

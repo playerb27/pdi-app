@@ -86,8 +86,11 @@ export interface Biomarker {
   value: string;
   unit: string;
   reference_range?: string;
-  flag: string;
+  flag: string;       // 'Normal' | 'Alto' | 'Bajo' | 'Excluido'
   system: string;
+  is_edited?: boolean;
+  original_value?: string;
+  excluded_from_chart?: boolean; // convenience derived from flag === 'Excluido'
 }
 
 export async function createStudy(patientId: string, fileName: string, summary: string, examDate?: string): Promise<Study | null> {
@@ -127,7 +130,10 @@ export async function getStudiesWithBiomarkers(patientId: string): Promise<Study
 
 export async function deleteStudy(studyId: string): Promise<boolean> {
   const { error } = await supabase.from('studies').delete().eq('id', studyId);
-  if (error) { console.error("Error deleting study:", error.message); return false; }
+  if (error) {
+    console.error('Error deleting study:', error.message, error.code);
+    throw new Error(error.message ?? 'No se pudo eliminar el estudio. Verifica los permisos.');
+  }
   return true;
 }
 
@@ -142,7 +148,13 @@ export async function updateBiomarker(
   };
   if (updates.originalValue !== undefined) payload.original_value = updates.originalValue;
   const { error } = await supabase.from('biomarkers').update(payload).eq('id', biomarkerId);
-  if (error) { console.error("Error updating biomarker:", error.message); return false; }
+  if (error) { console.error('Error updating biomarker:', error.message); return false; }
+  return true;
+}
+
+export async function deleteBiomarker(biomarkerId: string): Promise<boolean> {
+  const { error } = await supabase.from('biomarkers').delete().eq('id', biomarkerId);
+  if (error) { console.error('Error deleting biomarker:', error.message); return false; }
   return true;
 }
 

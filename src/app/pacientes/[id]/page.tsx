@@ -1,12 +1,13 @@
 'use client';
-import { useState, useEffect, use, useRef } from 'react';
+import { useState, useEffect, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare } from 'lucide-react';
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
-import { studyBiomarkerElementId, chartBiomarkerElementId, normalizeBiomarkerName } from '@/lib/biomarkers';
+import BiomarkerMasterTable from '@/components/BiomarkerMasterTable';
+import { normalizeBiomarkerName, studyBiomarkerElementId, chartBiomarkerElementId, tablaBiomarkerElementId } from '@/lib/biomarkers';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -78,7 +79,6 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [chatHistory, setChatHistory] = useState<{role: 'user'|'model', text: string, timestamp?: string}[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
-  const [showChatHistory, setShowChatHistory] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Smart search state
@@ -86,11 +86,38 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [glowId, setGlowId] = useState<string | null>(null);
 
-  // Compare mode state
+  // Fix #3 — Pre-save confirmation modal
+  type PendingSave = {
+    file: File;
+    hash: string;
+    aiData: any;
+    fileIndex: number;
+    update: (status: 'reading' | 'analyzing' | 'saving' | 'done' | 'error', msg?: string) => void;
+    resolve: (confirmed: boolean) => void;
+  };
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const [conflictSelections, setConflictSelections] = useState<Record<string, number>>({});
+  const [outlierCorrections, setOutlierCorrections] = useState<Record<string, string>>({});
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [bmFilter, setBmFilter] = useState<'all' | 'altered' | 'edited' | 'suspicious'>('all');
+  const [showOnlySuspiciousCharts, setShowOnlySuspiciousCharts] = useState(false);
+
+  const showError = (msg: string) => {
+    setErrorToast(msg);
+    setTimeout(() => setErrorToast(null), 6000);
+  };
+
+  // Active tab in left panel
+  const [activeTab, setActiveTab] = useState<'estudios' | 'evolucion' | 'tabla' | 'consulta'>('estudios');
+  const [isTreeOpen, setIsTreeOpen] = useState(true);
+
   const [isCompareMode, setIsCompareMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set());
   const [showComparativeModal, setShowComparativeModal] = useState(false);
   const [addedToReport, setAddedToReport] = useState(false);
+  // Processed series from EvolutionCharts — updated every time the chart re-renders
+  const [readySeriesMap, setReadySeriesMap] = useState<Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }>>({});
 
   const toggleCompareMode = () => {
     setIsCompareMode(prev => !prev);
@@ -121,9 +148,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const handleBiomarkerUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
     setStudies(prev => prev.map(s => s.id !== studyId ? s : {
       ...s,
-      biomarkers: (s.biomarkers as any[]).map(b =>
-        (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
-      ),
+      biomarkers: newFlag === 'Excluido'
+        // Biomarker was deleted from Supabase — remove from local state too
+        ? (s.biomarkers as any[]).filter(b => (b as any).id !== biomarkerId)
+        // Normal edit — update value and flag in place
+        : (s.biomarkers as any[]).map(b =>
+            (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
+          ),
     }));
   };
 
@@ -172,6 +203,22 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     localStorage.setItem(`pdi_chat_${id}`, JSON.stringify(chatHistory));
   }, [chatHistory, id]);
 
+  // Persist active tab across refreshes
+  useEffect(() => {
+    const key = `pdi_tab_${id}`;
+    const saved = localStorage.getItem(key) as typeof activeTab | null;
+    if (saved && ['estudios', 'evolucion', 'tabla', 'consulta'].includes(saved)) {
+      setActiveTab(saved);
+      if (saved === 'tabla') setIsTreeOpen(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    localStorage.setItem(`pdi_tab_${id}`, activeTab);
+  }, [activeTab, id]);
+
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isChatOpen]);
@@ -202,9 +249,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const loadStudies = async () => {
     const data = await getStudiesWithBiomarkers(id);
     setStudies(data);
-    if (data.length > 0 && !activeStudyId) {
-      setActiveStudyId(data[0].id);
-      setAnalysisResult({ biomarkers: data[0].biomarkers as Biomarker[] ?? [], summary: data[0].summary });
+    if (data.length > 0) {
+      // Always show the most recent study in the left panel
+      const newest = data[0];
+      setActiveStudyId(newest.id);
+      setAnalysisResult({ biomarkers: (newest.biomarkers ?? []) as Biomarker[], summary: newest.summary });
     }
   };
 
@@ -282,7 +331,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         const res = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, mimeType: file.type })
+          body: JSON.stringify({ base64, mimeType: file.type, patientName: patient?.full_name ?? '' })
         });
         const aiData = await res.json();
         if (!res.ok) { update('error', aiData.error); continue; }
@@ -302,6 +351,19 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           }
         }
 
+        // ── Fix #3: Show confirmation modal if suspicious values detected ────
+        const suspicious = aiData.suspiciousMarkers ?? [];
+        if (suspicious.length > 0) {
+          update('saving', `⚠️ ${suspicious.length} valor(es) sospechoso(s) — esperando confirmación...`);
+          const confirmed = await new Promise<boolean>(resolve => {
+            setPendingSave({ file, hash, aiData, fileIndex: i, update, resolve });
+          });
+          if (!confirmed) {
+            update('error', 'Subida cancelada por el usuario — valores no confirmados.');
+            continue;
+          }
+        }
+
         update('saving');
         const study = await createStudy(id, file.name, aiData.summary, aiData.exam_date ?? undefined);
         if (study) {
@@ -317,7 +379,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             const icon = audit.status === 'ok' ? '✅' : audit.status === 'warning' ? '⚠️' : '🔴';
             const label = audit.status === 'ok' ? 'Extracción verificada' : audit.status === 'warning' ? 'Revisar extracción' : 'Errores detectados';
             const issuesText = audit.issues?.length ? ` · ${audit.issues.length} issue(s)` : '';
-            update('done', `${icon} ${label} · ${audit.confidence}% confianza${issuesText} — ${audit.summary}`);
+            update('done', `${icon} ${label} · ${audit.confidence}% confianza${issuesText} · ${audit.summary}`);
           } else {
             update('done');
           }
@@ -364,16 +426,36 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
 
   // ─── Smart Biomarker Search ──────────────────────────────────────────────────
-  const scrollToMarker = (elementId: string, studyId?: string) => {
-    const doScroll = () => {
+  const scrollToMarker = (elementId: string, targetTab: typeof activeTab, studyId?: string) => {
+    // Explicitly scroll the left panel container — scrollIntoView picks the wrong ancestor
+    const tryScroll = (attemptsLeft: number) => {
       const el = document.getElementById(elementId);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setGlowId(elementId);
-      setTimeout(() => setGlowId(null), 2500);
+      if (el) {
+        const panel = document.getElementById('pdi-left-scroll');
+        if (panel) {
+          const panelRect = panel.getBoundingClientRect();
+          const elRect = el.getBoundingClientRect();
+          const scrollTarget = elRect.top - panelRect.top + panel.scrollTop - panel.clientHeight / 2 + el.clientHeight / 2;
+          panel.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
+        } else {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        setGlowId(elementId);
+        setTimeout(() => setGlowId(null), 2800);
+      } else if (attemptsLeft > 0) {
+        setTimeout(() => tryScroll(attemptsLeft - 1), 120);
+      }
     };
     setIsSearchOpen(false);
     setSearchQuery('');
+    // Switch to the right tab first
+    if (activeTab !== targetTab) {
+      setActiveTab(targetTab);
+      if (targetTab === 'tabla') setIsTreeOpen(false);
+      else setIsTreeOpen(true);
+      setTimeout(() => tryScroll(5), 350);
+      return;
+    }
     // If the result belongs to a specific study, activate it first, then scroll after render
     if (studyId && studyId !== activeStudyId) {
       const targetStudy = studies.find(s => s.id === studyId);
@@ -381,41 +463,58 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         setActiveStudyId(studyId);
         setAnalysisResult({ biomarkers: (targetStudy.biomarkers ?? []) as Biomarker[], summary: targetStudy.summary });
       }
-      setTimeout(doScroll, 200); // wait for re-render
+      setTimeout(() => tryScroll(5), 350);
     } else {
-      setTimeout(doScroll, 50);
+      setTimeout(() => tryScroll(3), 80);
     }
   };
 
   const searchResults = (() => {
     if (!searchQuery.trim() || searchQuery.length < 2) return [];
     const q = searchQuery.toLowerCase();
-    const results: { id: string; studyId?: string; label: string; sub: string; type: 'study' | 'chart' }[] = [];
-    // Study biomarker results (one per study that has the marker)
-    studies.forEach(s => {
-      const rawDate = (s as any).exam_date ?? null;
-      const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-      const displayDate = (rawDate ?? fileDate)
-        ? new Date((rawDate ?? fileDate) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
-        : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
-      (s.biomarkers ?? []).forEach(bm => {
-        if (bm.name.toLowerCase().includes(q)) {
-          const elemId = studyBiomarkerElementId(s.id, bm.name);
-          results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${bm.value} ${bm.unit}`, type: 'study' });
-        }
+    const results: { id: string; studyId?: string; label: string; sub: string; type: 'study' | 'chart' | 'tabla'; targetTab: typeof activeTab }[] = [];
+
+    if (activeTab === 'estudios') {
+      // One result per study that has the matching marker
+      studies.forEach(s => {
+        const rawDate = (s as any).exam_date ?? null;
+        const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+        const displayDate = (rawDate ?? fileDate)
+          ? new Date((rawDate ?? fileDate) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+          : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+        (s.biomarkers ?? []).forEach(bm => {
+          if (bm.name.toLowerCase().includes(q)) {
+            const elemId = studyBiomarkerElementId(s.id, bm.name);
+            results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${bm.value} ${bm.unit}`, type: 'study', targetTab: 'estudios' });
+          }
+        });
       });
-    });
-    // Chart results — deduplicated by canonical name
-    const seenCharts = new Set<string>();
-    studies.forEach(s => {
-      (s.biomarkers ?? []).forEach(bm => {
-        const canonical = normalizeBiomarkerName(bm.name);
-        if (bm.name.toLowerCase().includes(q) && !seenCharts.has(canonical)) {
-          seenCharts.add(canonical);
-          results.push({ id: chartBiomarkerElementId(bm.name), label: canonical, sub: `📈 Gráfica de evolución clínica`, type: 'chart' });
-        }
+    } else if (activeTab === 'evolucion') {
+      // One result per canonical biomarker name (deduplicated)
+      const seen = new Set<string>();
+      studies.forEach(s => {
+        (s.biomarkers ?? []).forEach(bm => {
+          const canonical = normalizeBiomarkerName(bm.name);
+          if (bm.name.toLowerCase().includes(q) && !seen.has(canonical)) {
+            seen.add(canonical);
+            results.push({ id: chartBiomarkerElementId(bm.name), label: canonical, sub: `📈 Gráfica de evolución clínica`, type: 'chart', targetTab: 'evolucion' });
+          }
+        });
       });
-    });
+    } else if (activeTab === 'tabla') {
+      // One result per canonical name (row in the master table)
+      const seen = new Set<string>();
+      studies.forEach(s => {
+        (s.biomarkers ?? []).forEach(bm => {
+          const canonical = normalizeBiomarkerName(bm.name);
+          if (bm.name.toLowerCase().includes(q) && !seen.has(canonical)) {
+            seen.add(canonical);
+            results.push({ id: tablaBiomarkerElementId(canonical), label: canonical, sub: `🧬 Fila en Tabla Maestra`, type: 'tabla', targetTab: 'tabla' });
+          }
+        });
+      });
+    }
+
     return results.slice(0, 14);
   })();
 
@@ -447,6 +546,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   }, {} as Record<string, Biomarker[]>) ?? {};
 
   const alteredCount = analysisResult?.biomarkers.filter(b => b.flag !== 'Normal').length ?? 0;
+
+  // ─── Build series for Comparative Modal ──────────────────────────────────────
+  // readySeriesMap is populated by EvolutionCharts via onSeriesReady — same data
+  // the sparklines show, with all deduplication and IQR processing already applied.
+  const comparativeSeries = [...selectedForCompare]
+    .map(name => readySeriesMap[name])
+    .filter(Boolean) as { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }[];
 
   if (loading || !patient) {
     return <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}><p>Cargando expediente...</p></div>;
@@ -530,6 +636,181 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         </div>
       )}
 
+      {/* ── Comparative Modal ── top-level, works from ANY tab ── */}
+      {showComparativeModal && selectedForCompare.size > 0 && (
+        <ComparativeModal
+          series={comparativeSeries}
+          onClose={() => setShowComparativeModal(false)}
+          onAddToReport={handleAddToReport}
+          onValueUpdated={handleBiomarkerUpdated}
+        />
+      )}
+
+      {/* ── Error Toast ── */}
+      {errorToast && (
+        <div style={{ position: 'fixed', bottom: 28, left: '50%', transform: 'translateX(-50%)', zIndex: 9999, background: '#1e1e1e', border: '1px solid rgba(239,68,68,0.6)', borderRadius: 12, padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.5)', maxWidth: 480 }}>
+          <span style={{ fontSize: 16 }}>🔴</span>
+          <span style={{ fontSize: 13, color: '#f87171', fontFamily: 'var(--font-main)', flex: 1 }}>{errorToast}</span>
+          <button onClick={() => setErrorToast(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+        </div>
+      )}
+
+      {/* ── Pre-save Clinical Review Modal ── */}
+      {pendingSave && (() => {
+        const conflicts: { name: string; candidates: { value: string; unit: string; flag: string; context: string }[]; recommendedIndex: number }[] = pendingSave.aiData.conflicts ?? [];
+        const outliers: { name: string; value: string; unit: string; severity: 'warning' | 'critical'; factor: number; description: string }[] = pendingSave.aiData.extremeOutliers ?? [];
+        const suspicious: { marker: string; value: string; corrected?: string; reason: string }[] = pendingSave.aiData.suspiciousMarkers ?? [];
+        const autoRemoved: string[] = pendingSave.aiData.deduplicationLog ?? [];
+        const needsReview = conflicts.length > 0 || outliers.length > 0 || suspicious.length > 0;
+        if (!needsReview) { pendingSave.resolve(true); setPendingSave(null); return null; }
+
+        const handleConfirm = (ok: boolean) => {
+          if (ok) {
+            // Apply conflict selections
+            if (conflicts.length > 0) {
+              for (const conflict of conflicts) {
+                const sel = conflictSelections[conflict.name] ?? conflict.recommendedIndex;
+                const chosen = conflict.candidates[sel];
+                if (!chosen) continue;
+                const bms = pendingSave.aiData.biomarkers as any[];
+                const idx = bms.findIndex((b: any) => b.name.toLowerCase() === conflict.name.toLowerCase());
+                if (idx !== -1) { bms[idx] = { ...bms[idx], value: chosen.value, unit: chosen.unit, flag: chosen.flag }; }
+              }
+            }
+            // Apply outlier manual corrections
+            for (const [markerName, correctedVal] of Object.entries(outlierCorrections)) {
+              if (!correctedVal.trim()) continue;
+              const bms = pendingSave.aiData.biomarkers as any[];
+              const idx = bms.findIndex((b: any) => b.name.toLowerCase() === markerName.toLowerCase());
+              if (idx !== -1) { bms[idx] = { ...bms[idx], value: correctedVal.trim(), is_edited: true, original_value: bms[idx].value }; }
+            }
+          }
+          setConflictSelections({});
+          setOutlierCorrections({});
+          pendingSave.resolve(ok);
+          setPendingSave(null);
+        };
+
+        return (
+          <div style={styles.modalOverlay}>
+            <div style={{ ...styles.modalContent, maxWidth: '620px', maxHeight: '85vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0 }}>
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: 18, fontFamily: 'var(--font-main)', color: 'var(--text-primary)' }}>🩺 Revisión Clínica Requerida</h2>
+                  <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+                    <strong style={{ color: 'var(--gold-primary)' }}>{pendingSave.file.name}</strong>
+                    {conflicts.length > 0 && <span> · {conflicts.length} conflicto(s) a resolver</span>}
+                    {outliers.length > 0 && <span> · {outliers.length} valor(es) extremo(s)</span>}
+                  </p>
+                </div>
+                <button onClick={() => handleConfirm(false)} style={styles.iconBtn}><X size={20} /></button>
+              </div>
+
+              {/* Conflicts */}
+              {conflicts.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#f97316' }}>🔀 Marcadores duplicados — ¿cuál es el correcto?</p>
+                  {conflicts.map((conflict, ci) => (
+                    <div key={ci} style={{ borderRadius: 12, border: '1px solid rgba(249,115,22,0.35)', background: 'rgba(249,115,22,0.04)', padding: '12px 14px', marginBottom: 8 }}>
+                      <p style={{ margin: '0 0 8px', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{conflict.name}</p>
+                      {conflict.candidates.map((c, ci2) => {
+                        const selected = (conflictSelections[conflict.name] ?? conflict.recommendedIndex) === ci2;
+                        return (
+                          <label key={ci2} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, cursor: 'pointer', border: `1px solid ${selected ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: selected ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', transition: 'all 0.15s', marginBottom: 4 }}>
+                            <input type="radio" name={`conflict-${ci}`} checked={selected} onChange={() => setConflictSelections(prev => ({ ...prev, [conflict.name]: ci2 }))} style={{ accentColor: 'var(--gold-primary)', width: 14, height: 14 }} />
+                            <span style={{ fontFamily: 'monospace', fontSize: 15, fontWeight: 700, color: selected ? 'var(--gold-primary)' : 'var(--text-primary)' }}>{c.value} <span style={{ fontSize: 11, fontWeight: 400 }}>{c.unit}</span></span>
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)', flex: 1 }}>{c.context}</span>
+                            {c.flag !== 'Normal' && <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: c.flag === 'Alto' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)', color: c.flag === 'Alto' ? '#f87171' : '#60a5fa' }}>{c.flag}</span>}
+                            {ci2 === conflict.recommendedIndex && <span style={{ fontSize: 9, color: '#22c55e', fontWeight: 700 }}>✓ REC</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Extreme outliers */}
+              {outliers.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <p style={{ margin: '0 0 10px', fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#ef4444' }}>🚨 Valores extremadamente alterados — ¿deseas corregirlo?</p>
+                  {outliers.map((o, oi) => {
+                    const isCrit = o.severity === 'critical';
+                    const corrected = outlierCorrections[o.name] ?? '';
+                    return (
+                      <div key={oi} style={{ padding: '12px 14px', borderRadius: 12, border: `1px solid ${isCrit ? 'rgba(239,68,68,0.6)' : 'rgba(249,115,22,0.4)'}`, background: isCrit ? 'rgba(239,68,68,0.08)' : 'rgba(249,115,22,0.05)', marginBottom: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: isCrit ? '#ef4444' : '#f97316' }}>{o.name}</span>
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 99, fontWeight: 800, background: isCrit ? 'rgba(239,68,68,0.2)' : 'rgba(249,115,22,0.15)', color: isCrit ? '#ef4444' : '#f97316' }}>{isCrit ? '🔴 CRÍTICO' : '🟠 MUY ALTERADO'}</span>
+                          </div>
+                          <span style={{ fontFamily: 'monospace', fontSize: 16, fontWeight: 800, color: isCrit ? '#ef4444' : '#f97316' }}>{o.value} <span style={{ fontSize: 11, fontWeight: 400 }}>{o.unit}</span></span>
+                        </div>
+                        <p style={{ margin: '0 0 10px', fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{o.description}</p>
+                        {/* Inline correction field */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>Corregir a:</span>
+                          <input
+                            type="text"
+                            placeholder={`ej: ${(parseFloat(o.value) / 10).toFixed(2)}`}
+                            value={corrected}
+                            onChange={e => setOutlierCorrections(prev => ({ ...prev, [o.name]: e.target.value }))}
+                            style={{ flex: 1, background: 'var(--bg-main)', border: `1px solid ${corrected ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, borderRadius: 8, padding: '6px 10px', color: 'var(--text-primary)', fontSize: 13, fontFamily: 'monospace', outline: 'none' }}
+                          />
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>{o.unit}</span>
+                          {corrected && (
+                            <button onClick={() => setOutlierCorrections(prev => { const n = {...prev}; delete n[o.name]; return n; })} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: 14, padding: '2px 4px' }}>✕</button>
+                          )}
+                        </div>
+                        {corrected && <p style={{ margin: '4px 0 0', fontSize: 10, color: '#22c55e' }}>✓ Se guardará como {corrected} {o.unit}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Unit conversions */}
+              {suspicious.length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <p style={{ margin: '0 0 8px', fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#a78bfa' }}>🔧 Conversiones aplicadas</p>
+                  {suspicious.map((s, idx) => (
+                    <div key={idx} style={{ padding: '6px 12px', borderRadius: 8, background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{s.marker}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#f87171', textDecoration: 'line-through', opacity: 0.7 }}>{s.value}</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>→</span>
+                        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#a78bfa', fontWeight: 700 }}>{s.corrected ?? '?'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Auto-removed */}
+              {autoRemoved.length > 0 && (
+                <div style={{ marginBottom: 16, padding: '8px 12px', borderRadius: 8, background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.15)' }}>
+                  <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 700, color: '#60a5fa' }}>🔁 Duplicados eliminados automáticamente:</p>
+                  {autoRemoved.map((d, idx) => <p key={idx} style={{ margin: '1px 0', fontSize: 10, color: 'var(--text-muted)' }}>• {d}</p>)}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, paddingTop: 12, borderTop: '1px solid var(--border-subtle)' }}>
+                <button onClick={() => handleConfirm(false)} style={styles.cancelBtn}>Cancelar subida</button>
+                <button
+                  onClick={() => handleConfirm(true)}
+                  className="btn-primary"
+                  style={{ padding: '12px 28px', background: outliers.some(o => o.severity === 'critical') ? '#ef4444' : '#f97316', boxShadow: `0 4px 14px ${outliers.some(o => o.severity === 'critical') ? 'rgba(239,68,68,0.35)' : 'rgba(249,115,22,0.35)'}` }}
+                >
+                  ✓ {conflicts.length > 0 ? 'Confirmar selecciones y guardar' : 'Entendido — guardar estudio'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Header ── */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 48px', flexShrink: 0, borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -551,22 +832,6 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             </p>
           </div>
         </div>
-        {analysisResult && (
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-            <div style={styles.statChip}>
-              <span style={{ fontSize: '22px', fontWeight: 700, color: 'var(--gold-primary)' }}>{analysisResult.biomarkers.length}</span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Marcadores</span>
-            </div>
-            <div style={styles.statChip}>
-              <span style={{ fontSize: '22px', fontWeight: 700, color: alteredCount > 0 ? '#ef4444' : '#22c55e' }}>{alteredCount}</span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Alterados</span>
-            </div>
-            <div style={styles.statChip}>
-              <span style={{ fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)' }}>{studies.length}</span>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Estudios</span>
-            </div>
-          </div>
-        )}
         {/* Action Buttons row — Buscar + Comparativa + Entrevista + Reporte */}
         <div style={{ display: 'flex', gap: '10px', alignItems: 'stretch' }}>
           {/* Buscar marcador */}
@@ -633,25 +898,31 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Buscar marcador... ej: HbA1c, Vitamina D, Glucosa"
+                placeholder={activeTab === 'estudios' ? '📊 Buscar en Estudios...' : activeTab === 'evolucion' ? '📈 Buscar gráfica...' : '🧬 Buscar en Tabla Maestra...'}
                 style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '16px', fontFamily: 'var(--font-main)' }}
               />
               <button onClick={() => setIsSearchOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px' }}>ESC</button>
             </div>
-            {searchResults.length === 0 && searchQuery.length >= 2 && (
+            {activeTab === 'consulta' && (
+              <div style={{ textAlign: 'center', padding: '24px' }}>
+                <p style={{ color: 'var(--gold-primary)', fontSize: '14px', margin: '0 0 6px' }}>🔍 Búsqueda de marcadores</p>
+                <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: 0 }}>Cambia a <strong style={{ color: 'var(--text-secondary)' }}>Estudios</strong>, <strong style={{ color: 'var(--text-secondary)' }}>Evolución Clínica</strong> o <strong style={{ color: 'var(--text-secondary)' }}>Tabla Maestra</strong> para buscar biomarcadores.</p>
+              </div>
+            )}
+            {activeTab !== 'consulta' && searchResults.length === 0 && searchQuery.length >= 2 && (
               <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px', fontSize: '14px' }}>No se encontró ningún marcador con ese nombre</p>
             )}
-            {searchResults.length === 0 && searchQuery.length < 2 && (
-              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px', fontSize: '13px' }}>Escribe al menos 2 caracteres para buscar</p>
+            {activeTab !== 'consulta' && searchResults.length === 0 && searchQuery.length < 2 && (
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px', fontSize: '13px' }}>Ingresa 2+ caracteres para iniciar la búsqueda</p>
             )}
             <div style={{ overflowY: 'auto', maxHeight: 'calc(70vh - 70px)' }}>
               {searchResults.map((r, i) => (
-                <button key={i} onClick={() => scrollToMarker(r.id, r.studyId)}
+                <button key={i} onClick={() => scrollToMarker(r.id, r.targetTab, r.studyId)}
                   style={{ width: '100%', textAlign: 'left', padding: '12px 20px', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.15s' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(212,175,55,0.06)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
-                  <span style={{ fontSize: '20px' }}>{r.type === 'study' ? '📊' : '📈'}</span>
+                  <span style={{ fontSize: '20px' }}>{r.type === 'study' ? '📊' : r.type === 'chart' ? '📈' : '🧬'}</span>
                   <div>
                     <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>{r.label}</p>
                     <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{r.sub}</p>
@@ -670,10 +941,139 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       `}</style>
 
       {/* ── Main Grid — dual scroll ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: '0', flex: 1, overflow: 'hidden' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTreeOpen ? '1fr 400px' : '1fr 0px', gap: 0, flex: 1, overflow: 'hidden', transition: 'grid-template-columns 0.35s cubic-bezier(0.4,0,0.2,1)' }}>
 
         {/* ── LEFT: scrollable independently ── */}
-        <div style={{ overflowY: 'auto', padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div id="pdi-left-scroll" style={{ overflowY: 'auto', padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+
+          {/* ── Tab bar ── */}
+          <div style={{ display: 'flex', gap: 4, padding: '4px', borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', width: 'fit-content' }}>
+            {([['estudios', '📊 Estudios'], ['evolucion', '📈 Evolución Clínica'], ['tabla', '🧬 Tabla Maestra'], ['consulta', '🤖 Consulta IA']] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab);
+                  if (tab === 'tabla') setIsTreeOpen(false);
+                  else if (tab !== 'consulta') setIsTreeOpen(true);
+                }}
+                style={{ padding: '8px 20px', borderRadius: 9, border: 'none', background: activeTab === tab ? 'var(--gold-primary)' : 'transparent', color: activeTab === tab ? '#000' : 'var(--text-muted)', cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: 13, fontWeight: 700, transition: 'all 0.2s', letterSpacing: '0.01em', whiteSpace: 'nowrap' }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* ── Evolución Clínica tab ── */}
+          {activeTab === 'evolucion' && (
+            <section style={styles.card}>
+              {studies.length > 0 ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Filtrar gráficas:</span>
+                    <button onClick={() => setShowOnlySuspiciousCharts(false)} style={{
+                      padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                      fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                      border: `1px solid ${!showOnlySuspiciousCharts ? 'var(--text-secondary)' : 'var(--border-subtle)'}`,
+                      background: !showOnlySuspiciousCharts ? 'rgba(255,255,255,0.06)' : 'transparent',
+                      color: !showOnlySuspiciousCharts ? 'var(--text-secondary)' : 'var(--text-muted)',
+                    }}>Todas las gráficas</button>
+                    <button onClick={() => setShowOnlySuspiciousCharts(true)} style={{
+                      padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                      fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                      border: `1px solid ${showOnlySuspiciousCharts ? '#f97316' : 'var(--border-subtle)'}`,
+                      background: showOnlySuspiciousCharts ? 'rgba(249,115,22,0.12)' : 'transparent',
+                      color: showOnlySuspiciousCharts ? '#f97316' : 'var(--text-muted)',
+                    }}>◇ Solo con valores sospechosos</button>
+                  </div>
+                  <EvolutionCharts
+                    studies={studies}
+                    glowId={glowId}
+                    compareMode={isCompareMode}
+                    selectedForCompare={selectedForCompare}
+                    onToggleCompare={toggleSelectForCompare}
+                    showOnlySuspicious={showOnlySuspiciousCharts}
+                    onSeriesReady={setReadySeriesMap}
+                    onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
+                      handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId);
+                    }}
+                  />
+                </>
+              ) : (
+                <p style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '32px' }}>Sube estudios para ver la evolución clínica.</p>
+              )}
+            </section>
+          )}
+
+          {/* ── Tabla Maestra tab ── */}
+          {activeTab === 'tabla' && (
+            <section style={styles.card}>
+              <BiomarkerMasterTable
+                studies={studies}
+                patientBirthDate={patient?.birth_date}
+                glowId={glowId}
+                onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) =>
+                  handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId)
+                }
+              />
+            </section>
+          )}
+
+          {/* ── Consulta IA tab ── */}
+          {activeTab === 'consulta' && (
+            <section style={{ ...styles.card, minHeight: '60vh' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <Bot color="var(--gold-primary)" size={22} />
+                  <div>
+                    <h2 style={{ fontSize: '18px', margin: 0, color: 'var(--text-primary)', fontFamily: 'var(--font-main)' }}>Historial de Consultas</h2>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0' }}>{chatHistory.filter(m => m.role === 'user').length} preguntas registradas</p>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  {chatHistory.length > 0 && (
+                    <button onClick={() => { if (confirm('¿Limpiar historial?')) { setChatHistory([]); localStorage.removeItem(`pdi_chat_${id}`); } }}
+                      style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#f87171', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                      Limpiar
+                    </button>
+                  )}
+                  <button onClick={() => setIsChatOpen(true)}
+                    style={{ padding: '6px 18px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-main)' }}>
+                    + Nueva Consulta
+                  </button>
+                </div>
+              </div>
+              {chatHistory.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', padding: '60px 0', color: 'var(--text-muted)' }}>
+                  <Bot size={40} color="rgba(212,175,55,0.3)" />
+                  <p style={{ fontSize: '15px', margin: 0 }}>Aún no hay consultas registradas</p>
+                  <button onClick={() => setIsChatOpen(true)}
+                    style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '14px', fontWeight: 700, fontFamily: 'var(--font-main)' }}>
+                    Hacer primera consulta
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {chatHistory.map((msg, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
+                      <div style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'user' ? 'var(--gold-primary)' : 'rgba(212,175,55,0.1)', border: msg.role === 'model' ? '1px solid rgba(212,175,55,0.3)' : 'none' }}>
+                        {msg.role === 'user' ? <span style={{ fontSize: '14px' }}>👤</span> : <Bot size={16} color="var(--gold-primary)" />}
+                      </div>
+                      <div style={{ flex: 1, maxWidth: '85%' }}>
+                        <div style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.7, backgroundColor: msg.role === 'user' ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', border: `1px solid ${msg.role === 'user' ? 'rgba(212,175,55,0.2)' : 'var(--border-subtle)'}`, color: 'var(--text-primary)' }}>
+                          {msg.text.split('\n').filter(l => l.trim()).map((line, j) => <p key={j} style={{ margin: '0 0 6px 0' }}>{line}</p>)}
+                        </div>
+                        {msg.timestamp && <p style={{ margin: '4px 0 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ── Estudios & Evolución tab ── */}
+          {activeTab === 'estudios' && <>
 
           {/* Upload section */}
           <section style={styles.card}>
@@ -775,12 +1175,39 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                               <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate}</span>
                             )}
                           </button>
-                          <button onClick={async () => {
-                            if (!confirm('¿Eliminar este estudio? Esta acción no se puede deshacer.')) return;
-                            await deleteStudy(s.id);
-                            if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
-                            await loadStudies();
-                          }} style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }} title="Eliminar estudio">×</button>
+                          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                            {deleteConfirmId === s.id ? (
+                              <>
+                                <button
+                                  onClick={async () => {
+                                    setDeleteConfirmId(null);
+                                    try {
+                                      await deleteStudy(s.id);
+                                      if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
+                                      await loadStudies();
+                                    } catch (err: any) {
+                                      showError(`Error al eliminar: ${err.message}`);
+                                    }
+                                  }}
+                                  style={{ padding: '3px 8px', background: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#fff', fontSize: '11px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
+                                >
+                                  Eliminar
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirmId(null)}
+                                  style={{ padding: '3px 7px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px' }}
+                                >
+                                  ✕
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteConfirmId(s.id)}
+                                style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }}
+                                title="Eliminar estudio"
+                              >×</button>
+                            )}
+                          </div>
                         </div>
                       );
                     })}
@@ -797,9 +1224,6 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
             {analysisResult ? (
               <div>
-                <div style={{ background: 'var(--bg-main)', padding: '16px', borderRadius: '8px', marginBottom: '16px', borderLeft: '3px solid var(--gold-primary)' }}>
-                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic', lineHeight: 1.7, margin: 0 }}>{analysisResult.summary}</p>
-                </div>
                 {/* Upload progress queue */}
                 {uploadQueue.length > 0 && (
                   <div style={{ marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -859,19 +1283,84 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           {/* Global Biomarker Cards — grouped by system (uses most recent study) */}
           {analysisResult && studies.length > 0 && (() => {
             const activeBms: Biomarker[] = (studies.find(s => s.id === activeStudyId)?.biomarkers ?? studies[0]?.biomarkers ?? []) as Biomarker[];
-            const grouped = activeBms.reduce((acc: Record<string, Biomarker[]>, b) => {
+            const alteredInStudy = activeBms.filter(b => b.flag !== 'Normal').length;
+            const editedInStudy = activeBms.filter(b => b.is_edited).length;
+
+            // Compute suspicious names: cross-study IQR analysis per canonical biomarker
+            const seriesHistoryMap: Record<string, number[]> = {};
+            for (const study of studies) {
+              for (const bm of (study.biomarkers ?? [])) {
+                const canonical = normalizeBiomarkerName(bm.name);
+                const v = parseFloat(bm.value);
+                if (!isNaN(v)) {
+                  if (!seriesHistoryMap[canonical]) seriesHistoryMap[canonical] = [];
+                  seriesHistoryMap[canonical].push(v);
+                }
+              }
+            }
+            const suspiciousNames = new Set<string>();
+            for (const bm of activeBms) {
+              const canonical = normalizeBiomarkerName(bm.name);
+              const vals = (seriesHistoryMap[canonical] ?? []).sort((a, b) => a - b);
+              if (vals.length < 5) continue;
+              const q1 = vals[Math.floor(vals.length * 0.25)];
+              const q3 = vals[Math.floor(vals.length * 0.75)];
+              const iqr = q3 - q1;
+              const v = parseFloat(bm.value);
+              if (iqr > 0 && !isNaN(v) && (v < q1 - 3 * iqr || v > q3 + 3 * iqr)) {
+                suspiciousNames.add(canonical);
+              }
+            }
+            const suspiciousInStudy = suspiciousNames.size;
+
+            const filteredBms = bmFilter === 'altered'
+              ? activeBms.filter(b => b.flag !== 'Normal')
+              : bmFilter === 'edited'
+              ? activeBms.filter(b => b.is_edited)
+              : bmFilter === 'suspicious'
+              ? activeBms.filter(b => suspiciousNames.has(normalizeBiomarkerName(b.name)))
+              : activeBms;
+
+            const grouped = filteredBms.reduce((acc: Record<string, Biomarker[]>, b) => {
               if (!acc[b.system]) acc[b.system] = [];
               acc[b.system].push(b);
               return acc;
             }, {});
-            return Object.entries(grouped).map(([system, bms]) => (
+
+            return <>
+              {/* Filter bar */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Filtrar:</span>
+                {([
+                  ['all', `Todo (${activeBms.length})`, 'var(--text-secondary)', 'rgba(255,255,255,0.06)'],
+                  ['altered', `⚠️ Alterados (${alteredInStudy})`, '#ef4444', 'rgba(239,68,68,0.12)'],
+                  ['edited', `✏️ Editados (${editedInStudy})`, 'var(--gold-primary)', 'rgba(212,175,55,0.12)'],
+                  ['suspicious', `◇ Sospechosos (${suspiciousInStudy})`, '#f97316', 'rgba(249,115,22,0.12)'],
+                ] as const).map(([mode, label, color, bg]) => (
+                  <button key={mode} onClick={() => setBmFilter(mode)} style={{
+                    padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                    fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                    border: `1px solid ${bmFilter === mode ? color : 'var(--border-subtle)'}`,
+                    background: bmFilter === mode ? bg : 'transparent',
+                    color: bmFilter === mode ? color : 'var(--text-muted)',
+                  }}>{label}</button>
+                ))}
+                {bmFilter !== 'all' && filteredBms.length === 0 && (
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Ningún biomarcador en esta categoría.</span>
+                )}
+                {bmFilter === 'suspicious' && suspiciousInStudy === 0 && studies.length < 5 && (
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>(Se necesitan ≥5 estudios con el mismo marcador para calcular sospechosos.)</span>
+                )}
+              </div>
+
+              {Object.entries(grouped).map(([system, bms]) => (
               <section key={system} style={styles.card}>
                 <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
                   {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
                 </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
                   {bms.map((b, i) => {
-                    const elemId = `bm-study-${activeStudyId ?? studies[0].id}-${b.name.replace(/\s+/g, '-')}`;
+                    const elemId = studyBiomarkerElementId(activeStudyId ?? studies[0].id, b.name);
                     const isGlowing = glowId === elemId;
                     const isAlt = b.flag !== 'Normal';
                     return (
@@ -908,95 +1397,55 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   })}
                 </div>
               </section>
-            ));
+            ))}
+          </>;
           })()}
 
-          {/* ── Evolución Clínica en el Tiempo ── */}
-          {studies.length > 0 && (
-            <EvolutionCharts
-              studies={studies}
-              glowId={glowId}
-              compareMode={isCompareMode}
-              selectedForCompare={selectedForCompare}
-              onToggleCompare={toggleSelectForCompare}
-              onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
-                handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId);
-              }}
-            />
-          )}
 
-          {/* ── Comparative Modal ── */}
-          {showComparativeModal && selectedForCompare.size > 0 && (() => {
-            // Build series for selected markers from all studies
-            const seriesMap: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }> = {};
-            const getStudyDate = (s: any) => { const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null; return s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at); };
-            const sorted = [...studies].sort((a, b) => new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime());
-            for (const study of sorted) {
-              for (const bm of (study.biomarkers ?? [])) {
-                const num = parseFloat(bm.value); if (isNaN(num)) continue;
-                const cn = normalizeBiomarkerName(bm.name);
-                if (!selectedForCompare.has(cn)) continue;
-                if (!seriesMap[cn]) seriesMap[cn] = { name: cn, unit: bm.unit, referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range, points: [] };
-                seriesMap[cn].points.push({ date: getStudyDate(study), value: num, flag: bm.flag, biomarkerId: (bm as any).id, studyId: study.id });
-              }
-            }
-            const selectedSeries = [...selectedForCompare].map(n => seriesMap[n]).filter(Boolean);
-            return (
-              <ComparativeModal
-                series={selectedSeries}
-                onClose={() => setShowComparativeModal(false)}
-                onAddToReport={handleAddToReport}
-                onValueUpdated={handleBiomarkerUpdated}
-              />
-            );
-          })()}
+          {/* Comparative Modal moved to top-level — see below */}
 
-          {/* ── Historial de Consultas al Asistente ── */}
-          {chatHistory.length > 0 && (
-            <section style={{ backgroundColor: 'var(--bg-surface)', borderRadius: '12px', border: '1px solid var(--border-subtle)', padding: '28px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <Bot color="var(--gold-primary)" size={22} />
-                  <div>
-                    <h2 style={{ fontSize: '18px', margin: 0, color: 'var(--text-primary)', fontFamily: 'var(--font-main)' }}>Historial de Consultas</h2>
-                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0' }}>{chatHistory.filter(m => m.role === 'user').length} preguntas registradas</p>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button onClick={() => setShowChatHistory(!showChatHistory)} style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
-                    {showChatHistory ? 'Ocultar' : 'Ver todo'}
-                  </button>
-                  <button onClick={() => setIsChatOpen(true)} style={{ padding: '6px 14px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-main)' }}>
-                    Nueva Consulta
-                  </button>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: showChatHistory ? '9999px' : '320px', overflow: 'hidden', transition: 'max-height 0.4s ease' }}>
-                {chatHistory.map((msg, i) => (
-                  <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
-                    <div style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'user' ? 'var(--gold-primary)' : 'rgba(212,175,55,0.1)', border: msg.role === 'model' ? '1px solid rgba(212,175,55,0.3)' : 'none' }}>
-                      {msg.role === 'user' ? <span style={{ fontSize: '14px' }}>👤</span> : <Bot size={16} color="var(--gold-primary)" />}
-                    </div>
-                    <div style={{ flex: 1, maxWidth: '85%' }}>
-                      <div style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.7, backgroundColor: msg.role === 'user' ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', border: `1px solid ${msg.role === 'user' ? 'rgba(212,175,55,0.2)' : 'var(--border-subtle)'}`, color: 'var(--text-primary)' }}>
-                        {msg.text.split('\n').filter(l => l.trim()).map((line, j) => <p key={j} style={{ margin: '0 0 6px 0' }}>{line}</p>)}
-                      </div>
-                      {msg.timestamp && <p style={{ margin: '4px 0 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {!showChatHistory && chatHistory.length > 4 && (
-                <button onClick={() => setShowChatHistory(true)} style={{ width: '100%', marginTop: '12px', padding: '8px', background: 'transparent', border: '1px solid var(--border-subtle)', borderRadius: '8px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
-                  Ver {chatHistory.length - 4} mensajes más
-                </button>
-              )}
-            </section>
-          )}
+
+          </> /* end estudios tab */}
         </div>
 
-        {/* ── RIGHT: Árbol Sistémico — scrollable independently ── */}
-        <div style={{ overflowY: 'auto', padding: '28px 48px 28px 0', borderLeft: '1px solid var(--border-subtle)' }}>
+        {/* ── RIGHT: Árbol Sistémico — sliding drawer ── */}
+        <div style={{ position: 'relative', overflow: 'hidden', borderLeft: isTreeOpen ? '1px solid var(--border-subtle)' : 'none', transition: 'border 0.35s' }}>
+
+          {/* Toggle tab — floats on left edge of panel */}
+          <button
+            onClick={() => setIsTreeOpen(o => !o)}
+            title={isTreeOpen ? 'Cerrar árbol' : 'Abrir árbol sistémico'}
+            style={{
+              position: 'fixed',
+              right: isTreeOpen ? 406 : 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              zIndex: 50,
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              borderRight: 'none',
+              borderLeft: '3px solid var(--gold-primary)',
+              borderRadius: '12px 0 0 12px',
+              padding: '20px 10px',
+              cursor: 'pointer',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 10,
+              boxShadow: '-6px 0 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(212,175,55,0.1)',
+              transition: 'right 0.35s cubic-bezier(0.4,0,0.2,1)',
+              color: 'var(--gold-primary)',
+              minHeight: 100,
+            }}
+          >
+            <Activity size={18} color="var(--gold-primary)" />
+            <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', writingMode: 'vertical-rl', textOrientation: 'mixed', color: 'var(--text-secondary)' }}>
+              {isTreeOpen ? '▶ Cerrar' : '◀ Árbol'}
+            </span>
+          </button>
+
+          {/* Panel content — slides with overflow */}
+          <div style={{ width: 400, overflowY: 'auto', padding: '28px 20px 28px 16px', height: '100%', opacity: isTreeOpen ? 1 : 0, transition: 'opacity 0.2s', pointerEvents: isTreeOpen ? 'auto' : 'none' }}>
           <section style={{ ...styles.card, position: 'sticky', top: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
               <Activity color="var(--gold-primary)" size={22} />
@@ -1056,8 +1505,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               })}
             </div>
           </section>
-        </div>
-      </div>
+          </div>{/* end inner panel content */}
+        </div>{/* end drawer outer */}
+      </div>{/* end main grid */}
 
       {/* Floating Chat Button */}
       <button

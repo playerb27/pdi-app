@@ -170,7 +170,9 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const approveModule = async (num: number) => {
     const mod = modules[num];
     if (!mod) return;
-    const content = editContent[num] ?? mod.content;
+    // Only use in-memory editContent if the user is actively in edit mode.
+    // Otherwise use the persisted content from DB to avoid approving stale drafts.
+    const content = editMode[num] ? (editContent[num] ?? mod.content) : mod.content;
     await upsertReportModule(id, num, mod.title, content, 'approved');
     setEditMode(prev => ({ ...prev, [num]: false }));
     await loadAll();
@@ -194,7 +196,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (!patient) return;
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { alert('Permite ventanas emergentes para generar el PDF.'); return; }
-    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies);
+    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies, biomarkers);
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -229,6 +231,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           patient,
           modules,
           studies: allStudies,
+          biomarkers,
           m6Markers: m6Groups.flatMap(g => g.markers),
           m6Groups: m6GroupsWithImages,
         }),

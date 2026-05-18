@@ -3,6 +3,7 @@ import { useState, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, ZoomIn, Check } from 'lucide-react';
 import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, chartBiomarkerElementId } from '@/lib/biomarkers';
+import { getCatalogEntry } from '@/lib/biomarker-catalog';
 import ExpandedChartModal, { type ChartSeries } from './ExpandedChartModal';
 
 interface BiomarkerTimeSeries {
@@ -10,7 +11,7 @@ interface BiomarkerTimeSeries {
   unit: string;
   system: string;
   referenceRange?: string;
-  points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[];
+  points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; suspicious?: boolean }[];
 }
 
 interface Props {
@@ -20,6 +21,8 @@ interface Props {
   selectedForCompare?: Set<string>;
   onToggleCompare?: (name: string) => void;
   onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
+  showOnlySuspicious?: boolean;
+  onSeriesReady?: (map: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }>) => void;
 }
 
 const MASTER_INDEX: Record<string, string> = {
@@ -161,19 +164,33 @@ function BiomarkerSparkline({
           {series.points.map((pt, i) => (
             <g key={i} onMouseEnter={() => setTooltip({ x: toX(i), y: toY(pt.value), pt })} onMouseLeave={() => setTooltip(null)} style={{ cursor: 'pointer' }}>
               <circle cx={toX(i)} cy={toY(pt.value)} r={8} fill="transparent" />
-              <circle cx={toX(i)} cy={toY(pt.value)} r={4} fill={lc} stroke="var(--bg-surface)" strokeWidth="2" />
+              {pt.suspicious ? (
+                // Hollow orange diamond for suspicious values
+                <>
+                  <polygon
+                    points={`${toX(i)},${toY(pt.value)-6} ${toX(i)+5},${toY(pt.value)} ${toX(i)},${toY(pt.value)+6} ${toX(i)-5},${toY(pt.value)}`}
+                    fill="none" stroke="#f97316" strokeWidth="1.5"
+                  />
+                  <text x={toX(i)} y={toY(pt.value)-9} textAnchor="middle" fontSize="8" fill="#f97316">⚠</text>
+                </>
+              ) : (
+                <circle cx={toX(i)} cy={toY(pt.value)} r={4} fill={lc} stroke="var(--bg-surface)" strokeWidth="2" />
+              )}
             </g>
           ))}
           {series.points.map((pt, i) => (
             <text key={i} x={toX(i)} y={H - 4} textAnchor="middle" fontSize="8" fill="var(--text-muted)">
-              {new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+              {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
             </text>
           ))}
         </svg>
         {tooltip && (
-          <div style={{ position: 'absolute', left: tooltip.x - 40, top: tooltip.y - 52, background: 'var(--bg-surface)', border: `1px solid ${flagColor(tooltip.pt.flag)}`, borderRadius: '8px', padding: '6px 10px', fontSize: '11px', color: 'var(--text-primary)', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
-            <span style={{ fontWeight: 700, color: flagColor(tooltip.pt.flag) }}>{tooltip.pt.value} {series.unit}</span>
-            <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>{new Date(tooltip.pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+          <div style={{ position: 'absolute', left: tooltip.x - 40, top: tooltip.y - 66, background: 'var(--bg-surface)', border: `1px solid ${tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag)}`, borderRadius: '8px', padding: '6px 10px', fontSize: '11px', color: 'var(--text-primary)', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+            {tooltip.pt.suspicious && (
+              <div style={{ fontSize: '10px', color: '#f97316', marginBottom: '3px', fontWeight: 700 }}>⚠️ Valor inusual — verificar extracción</div>
+            )}
+            <span style={{ fontWeight: 700, color: tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag) }}>{tooltip.pt.value} {series.unit}</span>
+            <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>{new Date(/^\d{4}-\d{2}-\d{2}$/.test(tooltip.pt.date) ? tooltip.pt.date + 'T12:00:00' : tooltip.pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
           </div>
         )}
       </div>
@@ -181,7 +198,7 @@ function BiomarkerSparkline({
   );
 }
 
-export default function EvolutionCharts({ studies, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated }: Props) {
+export default function EvolutionCharts({ studies, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, onSeriesReady }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
 
@@ -189,7 +206,9 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
     const map: Record<string, BiomarkerTimeSeries> = {};
     const getStudyDate = (s: Study) => {
       const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-      return (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+      const raw = (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+      // Normalize bare YYYY-MM-DD to local noon to avoid UTC→local shift
+      return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
     };
     const sortedStudies = [...studies].sort((a, b) => new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime());
 
@@ -198,6 +217,7 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
       for (const bm of study.biomarkers) {
         const numVal = parseFloat(bm.value);
         if (isNaN(numVal)) continue;
+        if (bm.flag === 'Excluido') continue;  // doctor explicitly removed from chart
         const canonicalName = normalizeBiomarkerName(bm.name);
         if (!map[canonicalName]) {
           map[canonicalName] = {
@@ -217,15 +237,111 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
         });
       }
     }
+
+    // ── INTELLIGENT POST-PROCESSING ───────────────────────────────────────────────
+    //
+    // Problem: multiple studies from the same exam date (or the same study
+    // containing both serum and urine values for the same biomarker name)
+    // produce two data points per date, creating an absurd zigzag in the chart.
+    //
+    // Solution: for each biomarker series—
+    //   Step 1. Compute the series MEDIAN (robust central tendency).
+    //   Step 2. Group all points by day (YYYY-MM-DD). For each day that has
+    //           multiple points, keep ONLY the one whose value is closest to
+    //           the series median. This picks 141 over 0.07 for Sodio, 9.8
+    //           over 4.1 for Calcio, 86 over 43 for Colesterol HDL, etc.
+    //   Step 3. Apply a 3×IQR statistical fence on the deduped series to
+    //           remove any extreme extraction errors that survived step 2.
+    // ─────────────────────────────────────────────────────────────────────
+    for (const series of Object.values(map)) {
+      if (series.points.length < 2) continue;
+
+      // Step 1: series median
+      const sortedVals = [...series.points].map(p => p.value).sort((a, b) => a - b);
+      const median = sortedVals[Math.floor(sortedVals.length / 2)];
+
+      // Step 2: per-day deduplication — keep point closest to median
+      const byDay = new Map<string, typeof series.points[0]>();
+      for (const pt of series.points) {
+        const key = pt.date.slice(0, 10);
+        const existing = byDay.get(key);
+        if (!existing || Math.abs(pt.value - median) < Math.abs(existing.value - median)) {
+          byDay.set(key, pt);
+        }
+      }
+      let deduped = [...byDay.values()].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+
+      // Step 3: IQR analysis — MARK suspicious values instead of removing them.
+      // A suspicious value is shown differently in the chart (hollow orange diamond +
+      // warning tooltip) but is NEVER deleted — the doctor sees it and decides.
+      if (deduped.length >= 5) {
+        const fv = deduped.map(p => p.value).sort((a, b) => a - b);
+        const q1 = fv[Math.floor(fv.length * 0.25)];
+        const q3 = fv[Math.floor(fv.length * 0.75)];
+        const iqr = q3 - q1;
+        if (iqr > 0) {
+          const lo = q1 - 3 * iqr;
+          const hi = q3 + 3 * iqr;
+          deduped = deduped.map(p => ({
+            ...p,
+            suspicious: p.value < lo || p.value > hi,
+          }));
+        }
+      }
+
+      // Step 4: Catalog absolute-bounds check.
+      // IQR fails when most historical data is itself wrong (extraction errors that
+      // look consistent with each other). This check uses the catalog's reference
+      // range as a physiological ground truth — independent of patient history.
+      // A point is suspicious if it is MORE than 2× above the catalog max,
+      // or LESS than 40% of the catalog min. These are biologically impossible
+      // values for a living human (e.g. Eritrocitos=12 when max is 5.8,
+      // Globulina=15 when max is 3.1, Plaquetas=50 when min is 150).
+      const catalogEntry = getCatalogEntry(series.name);
+      if (catalogEntry) {
+        const { refMin, refMax } = catalogEntry;
+        deduped = deduped.map(p => {
+          if (p.suspicious) return p; // already caught by IQR
+          let suspicious = false;
+          if (refMax !== null && p.value > refMax * 2.0) suspicious = true;
+          if (refMin !== null && refMin > 0 && p.value < refMin * 0.4) suspicious = true;
+          if (refMin === null && refMax !== null && refMax > 0 && p.value < refMax * 0.20) suspicious = true;
+          return suspicious ? { ...p, suspicious: true } : p;
+        });
+      }
+
+      // Step 5: Final trust override.
+      // If Gemini read the lab's own reference range and certified the value as
+      // 'Normal', it cannot be an extraction error — clear any suspicious flag.
+      // This handles catalog/unit mismatches (e.g. catalog uses ng/dL but data
+      // is stored as ng/mL, causing false positives in Step 4).
+      deduped = deduped.map(p =>
+        p.suspicious && p.flag === 'Normal' ? { ...p, suspicious: false } : p
+      );
+
+      series.points = deduped;
+    }
+
     return map;
   }, [studies]);
 
+  // Notify parent whenever the processed series map changes
+  // so ComparativeModal always gets the correctly-deduplicated data
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useMemo(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap]);
+
   const allSeries = Object.values(timeSeriesMap);
+  const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);
   const multiPointSeries = allSeries.filter(s => s.points.length >= 2);
   const singlePointSeries = allSeries.filter(s => s.points.length === 1);
   const systems = [...new Set(allSeries.map(s => s.system))];
-  const filteredMulti = selectedSystem ? multiPointSeries.filter(s => s.system === selectedSystem) : multiPointSeries;
-  const filteredSingle = selectedSystem ? singlePointSeries.filter(s => s.system === selectedSystem) : singlePointSeries;
+
+  const baseMulti = showOnlySuspicious ? multiPointSeries.filter(hasSuspicious) : multiPointSeries;
+  const baseSingle = showOnlySuspicious ? singlePointSeries.filter(hasSuspicious) : singlePointSeries;
+  const filteredMulti = selectedSystem ? baseMulti.filter(s => s.system === selectedSystem) : baseMulti;
+  const filteredSingle = selectedSystem ? baseSingle.filter(s => s.system === selectedSystem) : baseSingle;
   const groupBySys = (list: BiomarkerTimeSeries[]) => list.reduce((acc, s) => { if (!acc[s.system]) acc[s.system] = []; acc[s.system].push(s); return acc; }, {} as Record<string, BiomarkerTimeSeries[]>);
   const multiGrouped = groupBySys(filteredMulti);
   const singleGrouped = groupBySys(filteredSingle);
@@ -345,7 +461,21 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
           series={expandedSeries}
           onClose={() => setExpandedSeries(null)}
           onValueUpdated={(biomarkerId, newValue, newFlag, studyId) => {
+            // Propagate to parent so studies state + timeSeriesMap rebuild
             onBiomarkerUpdated?.(studyId, biomarkerId, newValue, newFlag);
+            // Also patch expandedSeries in-place so it stays correct if the modal
+            // stays open, and so re-opening doesn't need a full page reload
+            if (newFlag === 'Excluido') {
+              setExpandedSeries(prev => prev
+                ? { ...prev, points: prev.points.filter(p => p.biomarkerId !== biomarkerId) }
+                : null
+              );
+            } else {
+              setExpandedSeries(prev => prev
+                ? { ...prev, points: prev.points.map(p => p.biomarkerId === biomarkerId ? { ...p, value: parseFloat(newValue) || p.value, flag: newFlag } : p) }
+                : null
+              );
+            }
           }}
         />
       )}
