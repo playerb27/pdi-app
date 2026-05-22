@@ -5,7 +5,7 @@ import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, chartBiomarkerElementId } from '@/lib/biomarkers';
 import { getCatalogEntry } from '@/lib/biomarker-catalog';
 import ExpandedChartModal, { type ChartSeries } from './ExpandedChartModal';
-import { applyOverridesToSeriesMap } from '@/lib/biomarker-overrides';
+
 
 interface BiomarkerTimeSeries {
   name: string;
@@ -360,10 +360,8 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
   useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap]);
 
   // Apply localStorage overrides AFTER dedup — user edits always win
-  const displaySeriesMap = useMemo(
-    () => applyOverridesToSeriesMap(timeSeriesMap, patientId),
-    [timeSeriesMap, patientId]
-  );
+  // NOTE: overrides now come from Supabase (is_edited flag), no localStorage needed.
+  const displaySeriesMap = timeSeriesMap;
 
   const allSeries = Object.values(displaySeriesMap);
   const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);

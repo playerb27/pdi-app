@@ -10,6 +10,8 @@ export interface Patient {
   top_red_flags?: any;
   clinical_summary?: string;
   created_at: string;
+  chat_history?: any[];
+  comparative_groups?: any[];
 }
 
 export async function getPatients(): Promise<Patient[]> {
@@ -311,9 +313,9 @@ export async function deleteBiomarkersForStudy(studyId: string): Promise<void> {
   await supabase.from('biomarkers').delete().eq('study_id', studyId);
 }
 
-// ─── Module 6 (Comparative Charts) — stored in localStorage ─────────────────
+// ─── Module 6 (Comparative Charts) — stored in Supabase database ─────────────
 // The report_modules table has a check constraint allowing only module_num 1-5.
-// We store comparative chart GROUPS in localStorage keyed by patient ID.
+// We store comparative chart GROUPS in the patients table under comparative_groups JSONB column.
 // Each "Agregar al reporte" call saves a new independent comparison group.
 
 export interface ComparativeGroup {
@@ -322,54 +324,44 @@ export interface ComparativeGroup {
   createdAt: string;
 }
 
-const M6_KEY = (patientId: string) => `pdi_m6_${patientId}`;
-
-export function getComparativeGroups(patientId: string): ComparativeGroup[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(M6_KEY(patientId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    // Support both old format { markers: string[] } and new format { groups: [] }
-    if (Array.isArray(parsed.groups)) return parsed.groups;
-    // Migrate old flat format
-    if (Array.isArray(parsed.markers) && parsed.markers.length > 0) {
-      return [{ id: '1', markers: parsed.markers, createdAt: parsed.updatedAt ?? new Date().toISOString() }];
-    }
-    return [];
-  } catch { return []; }
+export async function getComparativeGroups(patientId: string): Promise<ComparativeGroup[]> {
+  const patient = await getPatientById(patientId);
+  return patient?.comparative_groups ?? [];
 }
 
-export function saveComparativeGroup(patientId: string, markers: string[]): void {
-  if (typeof window === 'undefined') return;
-  const existing = getComparativeGroups(patientId);
+export async function saveComparativeGroup(patientId: string, markers: string[]): Promise<void> {
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing = patient.comparative_groups ?? [];
   const newGroup: ComparativeGroup = {
     id: Date.now().toString(),
     markers,
     createdAt: new Date().toISOString(),
   };
-  localStorage.setItem(M6_KEY(patientId), JSON.stringify({
-    groups: [...existing, newGroup],
-    updatedAt: new Date().toISOString(),
-  }));
+  await updatePatient(patientId, {
+    comparative_groups: [...existing, newGroup]
+  });
 }
 
-export function removeComparativeGroup(patientId: string, groupId: string): void {
-  if (typeof window === 'undefined') return;
-  const existing = getComparativeGroups(patientId);
-  localStorage.setItem(M6_KEY(patientId), JSON.stringify({
-    groups: existing.filter(g => g.id !== groupId),
-    updatedAt: new Date().toISOString(),
-  }));
+export async function removeComparativeGroup(patientId: string, groupId: string): Promise<void> {
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing = patient.comparative_groups ?? [];
+  await updatePatient(patientId, {
+    comparative_groups: existing.filter(g => g.id !== groupId)
+  });
 }
 
-export function clearComparativeGroups(patientId: string): void {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem(M6_KEY(patientId));
+export async function clearComparativeGroups(patientId: string): Promise<void> {
+  await updatePatient(patientId, {
+    comparative_groups: []
+  });
 }
 
-// Legacy compat shim
+// Legacy compat shims
 export const saveComparativeMarkers = saveComparativeGroup;
-export const getComparativeMarkers = (patientId: string) =>
-  getComparativeGroups(patientId).flatMap(g => g.markers);
+export async function getComparativeMarkers(patientId: string): Promise<string[]> {
+  const groups = await getComparativeGroups(patientId);
+  return groups.flatMap(g => g.markers);
+}
 export const clearComparativeMarkers = clearComparativeGroups;

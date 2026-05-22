@@ -16,7 +16,7 @@ import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/gene
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
-import { getOverridesForPatient } from '@/lib/biomarker-overrides';
+
 
 // ─── SVG → PNG conversion (browser-only) ─────────────────────────────────────
 function svgToPngBase64(svgString: string, width = 700, height = 240): Promise<string> {
@@ -99,13 +99,15 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     }
   };
 
-  // Load comparative groups from localStorage when patient ID is known
+  // Load comparative groups from Supabase when patient ID is known
   useEffect(() => {
-    if (id) setM6Groups(getComparativeGroups(id));
+    if (!id) return;
+    getComparativeGroups(id).then(groups => setM6Groups(groups));
   }, [id]);
 
   // Build a ChartSeries from allStudies for a given canonical marker name,
   // then apply any localStorage overrides so manually-edited values always show.
+  // Build a ChartSeries from allStudies for a given canonical marker name.
   const buildSeriesForMarker = (markerName: string): ChartSeries | null => {
     const rawPoints: { date: string; value: number; flag: string; biomarkerId: string; studyId: string; isEdited?: boolean }[] = [];
     const getStudyDate = (s: any) => { const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null; return s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at); };
@@ -122,22 +124,11 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     }
     if (!rawPoints.length) return null;
 
-    // ── Apply localStorage overrides (same source of truth as charts and table) ──
-    const overrides = getOverridesForPatient(id);
-    const withOverrides = rawPoints.map(pt => {
-      const ptDate = pt.date ? pt.date.slice(0, 10) : '';
-      const override = overrides.find(o => o.canonicalName === markerName && o.studyDate === ptDate);
-      if (!override) return pt;
-      return { ...pt, value: override.numValue ?? parseFloat(override.value), flag: override.flag as any, isEdited: true };
-    });
-
-    // ── Median-dedup per day (same logic as comparativeSeries) ────────────────
-    // Prevents duplicate entries (e.g. Monocitos % and Monocitos /uL) from the
-    // same study polluting the chart. Edited/overridden values always win.
-    const allVals = withOverrides.map(p => p.value).sort((a, b) => a - b);
+    // ── Median-dedup per day ────────────────
+    const allVals = rawPoints.map(p => p.value).sort((a, b) => a - b);
     const median = allVals[Math.floor(allVals.length / 2)];
-    const byDay = new Map<string, typeof withOverrides[0]>();
-    for (const pt of withOverrides) {
+    const byDay = new Map<string, typeof rawPoints[0]>();
+    for (const pt of rawPoints) {
       const key = pt.date.slice(0, 10);
       const existing = byDay.get(key);
       if (!existing) { byDay.set(key, pt); }
@@ -531,7 +522,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                 {m6Groups.length} comparativa{m6Groups.length !== 1 ? 's' : ''} · clic en cada gráfica para editar valores
                               </p>
                               <button
-                                onClick={() => { clearComparativeGroups(id); setM6Groups([]); setExpanded(null); }}
+                                onClick={async () => { await clearComparativeGroups(id); setM6Groups([]); setExpanded(null); }}
                                 style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', color: 'rgba(239,68,68,0.7)', cursor: 'pointer', fontSize: '11px' }}
                               >
                                 Limpiar todo
@@ -548,8 +539,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                       📊 Comparativa {gi + 1}: {group.markers.join(' · ')}
                                     </span>
                                     <button
-                                      onClick={() => {
-                                        removeComparativeGroup(id, group.id);
+                                      onClick={async () => {
+                                        await removeComparativeGroup(id, group.id);
                                         setM6Groups(prev => prev.filter(g => g.id !== group.id));
                                       }}
                                       style={{ padding: '3px 8px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(239,68,68,0.25)', color: 'rgba(239,68,68,0.6)', cursor: 'pointer', fontSize: '10px' }}

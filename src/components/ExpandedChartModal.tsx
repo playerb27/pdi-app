@@ -2,7 +2,6 @@
 import { useState, useEffect } from 'react';
 import { X, Edit2, Check, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
 import { updateBiomarker, deleteBiomarker } from '@/lib/api';
-import { saveOverride, removeOverride } from '@/lib/biomarker-overrides';
 
 export interface ChartPoint {
   date: string;
@@ -132,21 +131,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
     setPoints(updated);
     onValueUpdated?.(pt.biomarkerId, editVal, editFlag, pt.studyId ?? '');
 
-    // ── OVERRIDE LAYER ─────────────────────────────────────────────────────
-    // Save to localStorage so this value ALWAYS survives page reloads,
-    // regardless of what the dedup logic picks from the DB.
-    saveOverride({
-      patientId,
-      studyId: pt.studyId ?? '',
-      biomarkerId: pt.biomarkerId,
-      canonicalName: series.name,
-      studyDate: pt.date.slice(0, 10),
-      value: editVal,
-      numValue: safeNewVal,
-      flag: editFlag,
-    });
-
-    setSaveStatus({ ok: true, msg: `✅ Guardado correctamente. Valor: ${editVal} — persistirá al recargar.` });
+    setSaveStatus({ ok: true, msg: `✅ Guardado correctamente. Valor: ${editVal}` });
     setSaving(false);
     setEditIdx(null);
   };

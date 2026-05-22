@@ -8,7 +8,7 @@ import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
 import BiomarkerMasterTable from '@/components/BiomarkerMasterTable';
 import { normalizeBiomarkerName, studyBiomarkerElementId, chartBiomarkerElementId, tablaBiomarkerElementId } from '@/lib/biomarkers';
-import { saveOverride } from '@/lib/biomarker-overrides';
+
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -213,26 +213,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     const originalValue = editBm.bm.is_edited ? editBm.bm.original_value : editBm.bm.value;
     const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag, originalValue });
     if (ok) {
-      // ── Persist to localStorage so this edit survives any re-render ──────
-      const canonicalName = normalizeBiomarkerName(editBm.bm.name);
-      const study = studies.find(s => s.id === editBm.studyId);
-      const studyDate = study ? (
-        (study as any).exam_date ??
-        study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ??
-        study.created_at
-      ).slice(0, 10) : '';
-      if (studyDate) {
-        saveOverride({
-          patientId: id,
-          studyId: editBm.studyId,
-          biomarkerId: editBm.bm.id,
-          canonicalName,
-          studyDate,
-          value: editValue,
-          numValue: parseFloat(editValue.replace(',', '.')) || 0,
-          flag: editFlag,
-        });
-      }
+      // Edit saved to DB with is_edited=true — no localStorage needed.
     }
     // Update local state immediately — do NOT reload from DB
     setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
@@ -255,19 +236,25 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     setEditBm(null);
   };
 
-  // Cargar historial guardado al entrar al perfil del paciente
+  // Cargar historial de chat desde Supabase al cargar el perfil
   useEffect(() => {
-    if (!id) return;
-    try {
-      const saved = localStorage.getItem(`pdi_chat_${id}`);
-      if (saved) setChatHistory(JSON.parse(saved));
-    } catch {}
-  }, [id]);
+    if (!patient?.chat_history) return;
+    if (patient.chat_history.length > 0 && chatHistory.length === 0) {
+      setChatHistory(patient.chat_history as {role: 'user'|'model', text: string, timestamp?: string}[]);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patient?.id]);
 
-  // Guardar historial cada vez que cambia
+  // Guardar historial en Supabase cada vez que cambia
+  const saveChatToDb = async (history: {role: 'user'|'model', text: string, timestamp?: string}[]) => {
+    if (!id) return;
+    await updatePatient(id, { chat_history: history } as any);
+  };
+
   useEffect(() => {
     if (!id || chatHistory.length === 0) return;
-    localStorage.setItem(`pdi_chat_${id}`, JSON.stringify(chatHistory));
+    saveChatToDb(chatHistory);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatHistory, id]);
 
   // Persist active tab across refreshes
@@ -304,6 +291,62 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   }, [mergeUndo?.target?.id]); // reset only when a new merge happens
 
   useEffect(() => { loadPatient(); loadStudies(); loadProgress(); loadDocuments(); }, [id]);
+
+  // ── Migración automática de localStorage → Supabase ──────────────────────────
+  // Runs ONCE after patient is loaded. If we find chat or Module 6 data in localStorage
+  // that the DB does not already have, we upload it and remove the local copy.
+  useEffect(() => {
+    if (!patient || !id) return;
+
+    const migrate = async () => {
+      // 1. Chat history migration
+      const localChatKey = `pdi_chat_${id}`;
+      try {
+        const localChat = localStorage.getItem(localChatKey);
+        if (localChat) {
+          const parsed = JSON.parse(localChat);
+          const dbChat = patient.chat_history ?? [];
+          // Only migrate if local has more messages than the DB
+          if (Array.isArray(parsed) && parsed.length > dbChat.length) {
+            console.log(`[PDI Migration] Uploading ${parsed.length} chat messages to Supabase for patient ${id}`);
+            await updatePatient(id, { chat_history: parsed } as any);
+            setChatHistory(parsed);
+          }
+          localStorage.removeItem(localChatKey);
+        }
+      } catch (e) { console.warn('[PDI Migration] Chat migration error:', e); }
+
+      // 2. Module 6 comparative groups migration
+      const localM6Key = `pdi_m6_${id}`;
+      try {
+        const localM6 = localStorage.getItem(localM6Key);
+        if (localM6) {
+          const parsed = JSON.parse(localM6);
+          const dbGroups = patient.comparative_groups ?? [];
+          if (Array.isArray(parsed) && parsed.length > dbGroups.length) {
+            console.log(`[PDI Migration] Uploading ${parsed.length} comparative groups to Supabase for patient ${id}`);
+            await updatePatient(id, { comparative_groups: parsed } as any);
+          }
+          localStorage.removeItem(localM6Key);
+        }
+      } catch (e) { console.warn('[PDI Migration] M6 migration error:', e); }
+
+      // 3. Clean up old biomarker overrides key (deprecated — values are now in Supabase is_edited)
+      const overridesKey = 'pdi_biomarker_overrides_v1';
+      try {
+        const raw = localStorage.getItem(overridesKey);
+        if (raw) {
+          // Note: overrides are now persisted via is_edited in Supabase.
+          // We just clean up the local key.
+          localStorage.removeItem(overridesKey);
+          console.log('[PDI Migration] Cleaned up deprecated pdi_biomarker_overrides_v1 key');
+        }
+      } catch (e) { console.warn('[PDI Migration] Overrides cleanup error:', e); }
+    };
+
+    migrate();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patient?.id]);
 
   const autoBuildCanonical = async () => {
     setIsBuildingCanonical(true);
@@ -641,13 +684,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     const results: { id: string; studyId?: string; label: string; sub: string; type: 'study' | 'chart' | 'tabla'; targetTab: typeof activeTab }[] = [];
 
     if (activeTab === 'estudios') {
-      // One result per (study × canonical biomarker) — apply overrides so corrected values show
-      const allOverrides = (() => {
-        try {
-          const raw = localStorage.getItem('pdi_biomarker_overrides_v1');
-          return raw ? (JSON.parse(raw) as any[]).filter((o: any) => o.patientId === id) : [];
-        } catch { return []; }
-      })();
+      // One result per (study × canonical biomarker) — corrected values come from is_edited flag in DB
 
       studies.forEach(s => {
         const rawDate = (s as any).exam_date ?? null;
@@ -657,19 +694,21 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           ? new Date(studyDate + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
           : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
 
-        // Deduplicate by canonical name within this study — first entry wins unless overridden
-        const seenInStudy = new Set<string>();
+        // Deduplicate by canonical name within this study — edited entries win
+        const seenInStudy = new Map<string, any>(); // canonical -> bm
         (s.biomarkers ?? []).forEach(bm => {
           const canonical = normalizeBiomarkerName(bm.name);
+          const existing = seenInStudy.get(canonical);
+          if (!existing || ((bm as any).is_edited && !existing.is_edited)) {
+            seenInStudy.set(canonical, bm);
+          }
+        });
+        seenInStudy.forEach((bm, canonical) => {
           const matches = bm.name.toLowerCase().includes(q) || canonical.toLowerCase().includes(q);
           if (!matches) return;
-          if (seenInStudy.has(canonical)) return;
-          seenInStudy.add(canonical);
 
-          // Apply override if one exists for this canonical + study date
-          const override = allOverrides.find((o: any) => o.canonicalName === canonical && o.studyDate === studyDate);
-          const displayValue = override ? `${override.value} ${bm.unit}` : `${bm.value} ${bm.unit}`;
-          const editedMark = override ? ' ✏️' : '';
+          const displayValue = `${bm.value} ${bm.unit}`;
+          const editedMark = (bm as any).is_edited ? ' ✏️' : '';
 
           const elemId = studyBiomarkerElementId(s.id, bm.name);
           results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${displayValue}${editedMark}`, type: 'study', targetTab: 'estudios' });
@@ -748,36 +787,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       const raw = s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at);
       return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
     };
-    const allOverrides = (() => {
-      try {
-        const raw = typeof window !== 'undefined' ? localStorage.getItem('pdi_biomarker_overrides_v1') : null;
-        return raw ? (JSON.parse(raw) as any[]).filter((o: any) => o.patientId === id) : [];
-      } catch { return []; }
-    })();
+    const allOverrides: any[] = []; // overrides now come from is_edited flag in DB, not localStorage
 
-    // Helper: apply localStorage overrides to the points of an already-built series.
-    // This is the final safety net — even if readySeriesMap has the raw Supabase value
-    // (e.g. 164 /uL for Monocitos), the override (4.1) always wins.
-    const applyOverridesToSeries = (series: typeof readySeriesMap[string]) => {
-      const updatedPoints = series.points.map(pt => {
-        const studyDate = pt.date.slice(0, 10);
-        const override = allOverrides.find(
-          (o: any) => o.canonicalName === series.name && o.studyDate === studyDate
-        );
-        if (!override) return pt;
-        return {
-          ...pt,
-          value: override.numValue ?? parseFloat(override.value),
-          flag: override.flag as string,
-          isEdited: true,
-        };
-      });
-      return { ...series, points: updatedPoints };
-    };
+    // Helper: apply DB-based edits (no-op since is_edited already reflects edits)
+    const applyOverridesToSeries = (series: typeof readySeriesMap[string]) => series;
 
     return [...selectedForCompare].map(name => {
-      // Prefer the already-processed series from EvolutionCharts, but ALWAYS
-      // apply localStorage overrides on top to guard against timing races.
+      // Prefer the already-processed series from EvolutionCharts
       if (readySeriesMap[name]) return applyOverridesToSeries(readySeriesMap[name]);
 
       // Fallback: build series inline
@@ -791,8 +807,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           const numVal = parseFloat(bm.value);
           if (isNaN(numVal)) continue;
           // Check override
-          const override = allOverrides.find((o: any) => o.canonicalName === canonical && o.studyDate === studyDate);
-          raw.push({ date: dateStr, value: override ? override.numValue ?? parseFloat(override.value) : numVal, flag: override ? override.flag : bm.flag, biomarkerId: (bm as any).id, studyId: study.id, isEdited: !!override || (bm as any).is_edited });
+      // Check DB is_edited flag
+          const override = null; // is_edited already set on bm from Supabase
+          raw.push({ date: dateStr, value: numVal, flag: bm.flag, biomarkerId: (bm as any).id, studyId: study.id, isEdited: (bm as any).is_edited });
         }
       }
       if (!raw.length) return null;
@@ -1330,7 +1347,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
                   {chatHistory.length > 0 && (
-                    <button onClick={() => { if (confirm('¿Limpiar historial?')) { setChatHistory([]); localStorage.removeItem(`pdi_chat_${id}`); } }}
+                    <button onClick={() => { if (confirm('¿Limpiar historial?')) { saveChatToDb([]); setChatHistory([]); } }}
                       style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(239,68,68,0.4)', background: 'transparent', color: '#f87171', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
                       Limpiar
                     </button>
@@ -1867,20 +1884,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               const raw = (activeStudy as any).exam_date ?? (fd ? fd + 'T12:00:00' : (activeStudy as any).created_at);
               return raw ? String(raw).slice(0, 10) : '';
             })() : '';
-            const studyOverrides = (() => {
-              try {
-                const key = `pdi_biomarker_overrides_v1`;
-                const raw = localStorage.getItem(key);
-                if (!raw) return [] as any[];
-                return (JSON.parse(raw) as any[]).filter(o => o.patientId === id && o.studyDate === activeStudyDate);
-              } catch { return [] as any[]; }
-            })();
-            const activeBms: Biomarker[] = rawActiveBms.map(b => {
-              const canonical = normalizeBiomarkerName(b.name);
-              const override = studyOverrides.find((o: any) => o.canonicalName === canonical);
-              if (!override) return b;
-              return { ...b, value: override.value, flag: override.flag, is_edited: true, original_value: (b as any).original_value ?? b.value } as Biomarker;
-            });
+            const activeBms: Biomarker[] = rawActiveBms.map(b => b); // values come directly from DB (is_edited flag preserved)
 
             const alteredInStudy = activeBms.filter(b => b.flag !== 'Normal').length;
             const editedInStudy = activeBms.filter(b => b.is_edited).length;
@@ -2118,7 +2122,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Expediente: {patient.full_name}</span>
             </div>
             <button
-              onClick={() => { if (confirm('¿Limpiar historial de consultas de este paciente?')) { setChatHistory([]); localStorage.removeItem(`pdi_chat_${id}`); } }}
+              onClick={() => { if (confirm('¿Limpiar historial de consultas de este paciente?')) { saveChatToDb([]); setChatHistory([]); } }}
               style={{ background: 'none', border: '1px solid var(--border-subtle)', borderRadius: '6px', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', padding: '4px 10px', fontFamily: 'var(--font-main)' }}
             >
               Limpiar

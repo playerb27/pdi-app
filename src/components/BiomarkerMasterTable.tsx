@@ -5,7 +5,7 @@ import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, tablaBiomarkerElementId } from '@/lib/biomarkers';
 import { BIOMARKER_CATALOG, CATALOG_SYSTEMS, getCatalogEntry, computeFlag, type CatalogEntry } from '@/lib/biomarker-catalog';
 import { updateBiomarker } from '@/lib/api';
-import { getOverridesForPatient, saveOverride } from '@/lib/biomarker-overrides';
+
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface CellData {
@@ -224,8 +224,9 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
           };
         }
 
-        // Only keep one value per study date (last write wins — avoids zigzag)
-        dataMap[canonical].cells[dateKey] = {
+        // Keep one value per study date — prioritize is_edited rows over non-edited duplicates.
+        // This ensures manually corrected values from the DB always win over raw duplicates.
+        const incoming: CellData = {
           value: isNaN(num) ? 0 : num,
           rawValue: rawStr,
           flag,
@@ -234,30 +235,12 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
           isEdited: (bm as any).is_edited,
           originalValue: (bm as any).original_value || null,
         };
-      }
-    }
-
-    // ── Apply localStorage overrides (same source of truth as charts) ────────
-    // This ensures manually-edited values always show in the table even if the
-    // parent re-passes stale studies from Supabase.
-    const overrides = getOverridesForPatient(patientId);
-    for (const override of overrides) {
-      const row = dataMap[override.canonicalName];
-      if (!row) continue;
-      // Find the cell whose study date matches the override
-      for (const [dateKey, cell] of Object.entries(row.cells)) {
-        if (dateKey.slice(0, 10) === override.studyDate) {
-          const newFlag = computeFlag(override.canonicalName, override.numValue) as 'Normal' | 'Alto' | 'Bajo';
-          row.cells[dateKey] = {
-            ...cell,
-            value: override.numValue,
-            rawValue: override.value,
-            flag: newFlag,
-            isEdited: true,
-            originalValue: cell.originalValue ?? cell.rawValue,
-          };
-          break;
+        const existing = dataMap[canonical].cells[dateKey];
+        if (!existing || (incoming.isEdited && !existing.isEdited)) {
+          // Accept: no existing cell, or incoming is edited and existing is not
+          dataMap[canonical].cells[dateKey] = incoming;
         }
+        // If existing is already edited and incoming is not, keep existing
       }
     }
 
@@ -297,35 +280,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
   const alteredCells = allRows.flatMap(r => Object.values(r.cells)).filter(c => c.flag !== 'Normal').length;
 
   const handleCellSave = (biomarkerId: string, studyId: string, val: string, flag: string) => {
-    // ── Persist to localStorage (same as charts) so the value survives re-renders ──
-    // Find the canonical name and study date so we can build the override record
-    let canonicalName = '';
-    let studyDate = '';
-    for (const study of localStudies) {
-      if (study.id !== studyId) continue;
-      studyDate = getStudyDate(study).slice(0, 10);
-      for (const bm of (study.biomarkers ?? [])) {
-        if ((bm as any).id === biomarkerId) {
-          canonicalName = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
-          break;
-        }
-      }
-      break;
-    }
-    if (canonicalName && studyDate) {
-      saveOverride({
-        patientId,
-        studyId,
-        biomarkerId,
-        canonicalName,
-        studyDate,
-        value: val,
-        numValue: parseFloat(val.replace(',', '.')) || 0,
-        flag,
-      });
-    }
-
-    // ── Also patch local studies state so UI re-renders immediately ──────────
+    // ── Patch local studies state so UI re-renders immediately ───────────────
     setLocalStudies(prev => prev.map(s => s.id !== studyId ? s : {
       ...s,
       biomarkers: (s.biomarkers ?? []).map((b: any) => {
