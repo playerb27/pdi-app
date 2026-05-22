@@ -1,28 +1,40 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { TrendingUp, TrendingDown, Minus, ZoomIn, Check } from 'lucide-react';
 import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, chartBiomarkerElementId } from '@/lib/biomarkers';
 import { getCatalogEntry } from '@/lib/biomarker-catalog';
 import ExpandedChartModal, { type ChartSeries } from './ExpandedChartModal';
+import { applyOverridesToSeriesMap } from '@/lib/biomarker-overrides';
 
 interface BiomarkerTimeSeries {
   name: string;
   unit: string;
   system: string;
   referenceRange?: string;
-  points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; suspicious?: boolean }[];
+  points: {
+    date: string;
+    value: number;
+    flag: string;
+    biomarkerId?: string;
+    studyId?: string;
+    suspicious?: boolean;
+    isEdited?: boolean;
+    originalValue?: string | null;
+  }[];
 }
 
 interface Props {
   studies: Study[];
+  patientId: string;
   glowId?: string | null;
   compareMode?: boolean;
   selectedForCompare?: Set<string>;
   onToggleCompare?: (name: string) => void;
   onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
   showOnlySuspicious?: boolean;
-  onSeriesReady?: (map: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }>) => void;
+  onSeriesReady?: (map: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; isEdited?: boolean; originalValue?: string | null }[] }>) => void;
+  documents?: any[];
 }
 
 const MASTER_INDEX: Record<string, string> = {
@@ -42,7 +54,8 @@ const MASTER_INDEX: Record<string, string> = {
   'Anexos y Glosario': '📎',
 };
 
-function flagColor(flag: string) {
+function flagColor(flag: string, isEdited?: boolean) {
+  if (isEdited) return '#d4af37';
   return flag === 'Alto' ? '#ef4444' : flag === 'Bajo' ? '#3b82f6' : '#22c55e';
 }
 
@@ -76,7 +89,7 @@ function BiomarkerSparkline({
   const firstPt = series.points[0];
   const trend = lastPt.value - firstPt.value;
   const trendPct = firstPt.value !== 0 ? ((trend / firstPt.value) * 100).toFixed(1) : '0';
-  const lc = flagColor(lastPt.flag);
+  const lc = flagColor(lastPt.flag, lastPt.isEdited);
   const [hovered, setHovered] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; pt: typeof lastPt } | null>(null);
 
@@ -86,15 +99,16 @@ function BiomarkerSparkline({
         position: 'relative',
         background: isSelected ? 'rgba(212,175,55,0.07)' : 'var(--bg-main)',
         borderRadius: '10px',
-        border: `1px solid ${isSelected ? 'rgba(212,175,55,0.6)' : isGlowing ? 'rgba(212,175,55,0.8)' : lastPt.flag !== 'Normal' ? `${lc}40` : 'var(--border-subtle)'}`,
+        border: `${isGlowing ? '2px' : '1px'} solid ${isSelected ? 'rgba(212,175,55,0.6)' : isGlowing ? 'rgba(212,175,55,0.95)' : lastPt.flag !== 'Normal' ? `${lc}40` : 'var(--border-subtle)'}`,
         padding: '14px 16px',
         minWidth: '280px',
-        transition: 'all 0.2s',
+        transition: 'border 0.3s, background 0.3s',
         cursor: compareMode ? 'pointer' : 'default',
-        animation: isGlowing ? 'pdi-glow 2.5s ease' : 'none',
+        zIndex: isGlowing ? 2 : 'auto' as any,
         transform: hovered && !compareMode ? 'translateY(-1px)' : 'none',
         boxShadow: hovered && !compareMode ? '0 8px 24px rgba(0,0,0,0.3)' : 'none',
       }}
+      className={isGlowing ? 'pdi-glow-active' : ''}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={compareMode ? onToggle : undefined}
@@ -174,7 +188,7 @@ function BiomarkerSparkline({
                   <text x={toX(i)} y={toY(pt.value)-9} textAnchor="middle" fontSize="8" fill="#f97316">⚠</text>
                 </>
               ) : (
-                <circle cx={toX(i)} cy={toY(pt.value)} r={4} fill={lc} stroke="var(--bg-surface)" strokeWidth="2" />
+                <circle cx={toX(i)} cy={toY(pt.value)} r={4} fill={flagColor(pt.flag, pt.isEdited)} stroke="var(--bg-surface)" strokeWidth="2" />
               )}
             </g>
           ))}
@@ -185,11 +199,14 @@ function BiomarkerSparkline({
           ))}
         </svg>
         {tooltip && (
-          <div style={{ position: 'absolute', left: tooltip.x - 40, top: tooltip.y - 66, background: 'var(--bg-surface)', border: `1px solid ${tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag)}`, borderRadius: '8px', padding: '6px 10px', fontSize: '11px', color: 'var(--text-primary)', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
-            {tooltip.pt.suspicious && (
+          <div style={{ position: 'absolute', left: tooltip.x - 40, top: tooltip.y - 66, background: 'var(--bg-surface)', border: `1px solid ${tooltip.pt.isEdited ? '#d4af37' : tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag)}`, borderRadius: '8px', padding: '6px 10px', fontSize: '11px', color: 'var(--text-primary)', pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+            {tooltip.pt.isEdited && (
+              <div style={{ fontSize: '10px', color: '#d4af37', marginBottom: '3px', fontWeight: 700 }}>✏️ Corregido manualmente</div>
+            )}
+            {tooltip.pt.suspicious && !tooltip.pt.isEdited && (
               <div style={{ fontSize: '10px', color: '#f97316', marginBottom: '3px', fontWeight: 700 }}>⚠️ Valor inusual — verificar extracción</div>
             )}
-            <span style={{ fontWeight: 700, color: tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag) }}>{tooltip.pt.value} {series.unit}</span>
+            <span style={{ fontWeight: 700, color: tooltip.pt.isEdited ? '#d4af37' : tooltip.pt.suspicious ? '#f97316' : flagColor(tooltip.pt.flag) }}>{tooltip.pt.value} {series.unit}</span>
             <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>{new Date(/^\d{4}-\d{2}-\d{2}$/.test(tooltip.pt.date) ? tooltip.pt.date + 'T12:00:00' : tooltip.pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
           </div>
         )}
@@ -198,7 +215,7 @@ function BiomarkerSparkline({
   );
 }
 
-export default function EvolutionCharts({ studies, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, onSeriesReady }: Props) {
+export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, onSeriesReady, documents }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
 
@@ -218,12 +235,12 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
         const numVal = parseFloat(bm.value);
         if (isNaN(numVal)) continue;
         if (bm.flag === 'Excluido') continue;  // doctor explicitly removed from chart
-        const canonicalName = normalizeBiomarkerName(bm.name);
+        const canonicalName = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
         if (!map[canonicalName]) {
           map[canonicalName] = {
             name: canonicalName,
             unit: bm.unit,
-            system: bm.system,
+            system: getCatalogEntry(canonicalName)?.system ?? bm.system ?? (bm as any).canonical_system ?? 'Otros Marcadores',
             referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range,
             points: [],
           };
@@ -234,6 +251,8 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
           flag: bm.flag,
           biomarkerId: (bm as any).id,
           studyId: study.id,
+          isEdited: (bm as any).is_edited || false,
+          originalValue: (bm as any).original_value || null,
         });
       }
     }
@@ -260,13 +279,21 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
       const sortedVals = [...series.points].map(p => p.value).sort((a, b) => a - b);
       const median = sortedVals[Math.floor(sortedVals.length / 2)];
 
-      // Step 2: per-day deduplication — keep point closest to median
+      // Step 2: per-day deduplication — keep point closest to median, but ALWAYS prioritize edited points!
       const byDay = new Map<string, typeof series.points[0]>();
       for (const pt of series.points) {
         const key = pt.date.slice(0, 10);
         const existing = byDay.get(key);
-        if (!existing || Math.abs(pt.value - median) < Math.abs(existing.value - median)) {
+        if (!existing) {
           byDay.set(key, pt);
+        } else {
+          if (pt.isEdited && !existing.isEdited) {
+            byDay.set(key, pt);
+          } else if (!pt.isEdited && existing.isEdited) {
+            // Keep existing
+          } else if (Math.abs(pt.value - median) < Math.abs(existing.value - median)) {
+            byDay.set(key, pt);
+          }
         }
       }
       let deduped = [...byDay.values()].sort(
@@ -329,10 +356,16 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
 
   // Notify parent whenever the processed series map changes
   // so ComparativeModal always gets the correctly-deduplicated data
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useMemo(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap]);
+  // Must be useEffect (not useMemo) — calling parent setState during render is illegal in React 19
+  useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap]);
 
-  const allSeries = Object.values(timeSeriesMap);
+  // Apply localStorage overrides AFTER dedup — user edits always win
+  const displaySeriesMap = useMemo(
+    () => applyOverridesToSeriesMap(timeSeriesMap, patientId),
+    [timeSeriesMap, patientId]
+  );
+
+  const allSeries = Object.values(displaySeriesMap);
   const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);
   const multiPointSeries = allSeries.filter(s => s.points.length >= 2);
   const singlePointSeries = allSeries.filter(s => s.points.length === 1);
@@ -419,7 +452,7 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px' }}>
                   {list.map(series => {
                     const pt = series.points[0];
-                    const fc = flagColor(pt.flag);
+                    const fc = flagColor(pt.flag, pt.isEdited);
                     const isSelected = selectedForCompare?.has(series.name) ?? false;
                     return (
                       <div
@@ -455,10 +488,11 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
         )}
       </section>
 
-      {/* Expanded chart modal */}
       {expandedSeries && (
         <ExpandedChartModal
           series={expandedSeries}
+          patientId={patientId}
+          documents={documents}
           onClose={() => setExpandedSeries(null)}
           onValueUpdated={(biomarkerId, newValue, newFlag, studyId) => {
             // Propagate to parent so studies state + timeSeriesMap rebuild
@@ -472,7 +506,21 @@ export default function EvolutionCharts({ studies, glowId, compareMode, selected
               );
             } else {
               setExpandedSeries(prev => prev
-                ? { ...prev, points: prev.points.map(p => p.biomarkerId === biomarkerId ? { ...p, value: parseFloat(newValue) || p.value, flag: newFlag } : p) }
+                ? {
+                    ...prev,
+                    points: prev.points.map(p => {
+                      if (p.biomarkerId !== biomarkerId) return p;
+                      const cleanOrig = p.originalValue ? String(p.originalValue).split('|')[0] : String(p.value);
+                      const timestamp = new Date().toISOString();
+                      return {
+                        ...p,
+                        value: parseFloat(newValue) || p.value,
+                        flag: newFlag,
+                        isEdited: true,
+                        originalValue: `${cleanOrig}|${timestamp}`
+                      };
+                    })
+                  }
                 : null
               );
             }

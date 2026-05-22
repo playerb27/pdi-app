@@ -1,13 +1,14 @@
 'use client';
 import { useState, useEffect, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare } from 'lucide-react';
-import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, Patient, Study } from '@/lib/api';
-import { TOTAL_QUESTIONS } from '@/lib/questionnaire-data-ext';
+import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare, FolderOpen, FileText, Trash2, Eye, Search, Paperclip } from 'lucide-react';
+import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, getCanonicalBuildStatus, Patient, Study } from '@/lib/api';
+import { TOTAL_QUESTIONS, ALL_SECTIONS, HIDDEN_QUESTION_IDS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
 import BiomarkerMasterTable from '@/components/BiomarkerMasterTable';
 import { normalizeBiomarkerName, studyBiomarkerElementId, chartBiomarkerElementId, tablaBiomarkerElementId } from '@/lib/biomarkers';
+import { saveOverride } from '@/lib/biomarker-overrides';
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -38,6 +39,7 @@ interface Biomarker {
   system: string;
   is_edited?: boolean;       // marked when manually corrected
   original_value?: string;   // preserved original AI value
+  created_at?: string;       // database row creation timestamp
 }
 
 export default function PatientProfile({ params }: { params: Promise<{ id: string }> }) {
@@ -58,6 +60,18 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [studies, setStudies] = useState<Study[]>([]);
   const [activeStudyId, setActiveStudyId] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  const latestStudy = useMemo(() => {
+    if (studies.length === 0) return null;
+    return [...studies].sort((a, b) => {
+      const getStudyDate = (s: Study) => {
+        const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+        const raw = (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+        return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
+      };
+      return new Date(getStudyDate(b)).getTime() - new Date(getStudyDate(a)).getTime();
+    })[0];
+  }, [studies]);
 
   // Árbol sistémico
   const [expandedSystem, setExpandedSystem] = useState<number | null>(null);
@@ -101,6 +115,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [bmFilter, setBmFilter] = useState<'all' | 'altered' | 'edited' | 'suspicious'>('all');
+  const [viewMode, setViewMode] = useState<'systems' | 'original'>('systems');
   const [showOnlySuspiciousCharts, setShowOnlySuspiciousCharts] = useState(false);
 
   const showError = (msg: string) => {
@@ -109,7 +124,15 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   };
 
   // Active tab in left panel
-  const [activeTab, setActiveTab] = useState<'estudios' | 'evolucion' | 'tabla' | 'consulta'>('estudios');
+  const [activeTab, setActiveTab] = useState<'estudios' | 'evolucion' | 'tabla' | 'consulta' | 'documentos'>('estudios');
+  const [documents, setDocuments] = useState<any[]>([]);
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  const [documentFilterType, setDocumentFilterType] = useState<string>('todos');
+  const [documentSearchQuery, setDocumentSearchQuery] = useState<string>('');
+  const [manualDocFile, setManualDocFile] = useState<File | null>(null);
+  const [manualDocType, setManualDocType] = useState<string>('otros');
+  const [manualDocNotes, setManualDocNotes] = useState<string>('');
+  const [showUploadForm, setShowUploadForm] = useState<boolean>(false);
   const [isTreeOpen, setIsTreeOpen] = useState(true);
 
   const [isCompareMode, setIsCompareMode] = useState(false);
@@ -118,6 +141,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [addedToReport, setAddedToReport] = useState(false);
   // Processed series from EvolutionCharts — updated every time the chart re-renders
   const [readySeriesMap, setReadySeriesMap] = useState<Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }>>({});
+
+  // Canonical build state
+  type CanonicalStatus = 'none' | 'stale' | 'upToDate';
+  const [canonicalStatus, setCanonicalStatus] = useState<CanonicalStatus>('none');
+  const [canonicalLastBuilt, setCanonicalLastBuilt] = useState<Date | null>(null);
+  const [isBuildingCanonical, setIsBuildingCanonical] = useState(false);
+  const [canonicalMsg, setCanonicalMsg] = useState<string | null>(null);
 
   const toggleCompareMode = () => {
     setIsCompareMode(prev => !prev);
@@ -156,6 +186,19 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
           ),
     }));
+
+    if (analysisResult) {
+      setAnalysisResult(prev => prev ? {
+        ...prev,
+        biomarkers: newFlag === 'Excluido'
+          ? prev.biomarkers.filter(b => b.id !== biomarkerId)
+          : prev.biomarkers.map(b =>
+              b.id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: b.original_value ?? b.value }
+            )
+      } : prev);
+    }
+    // NOTE: Do NOT call autoBuildCanonical() here — it triggers loadStudies()
+    // which would overwrite the local state we just set.
   };
 
   // Biomarker inline edit state
@@ -168,8 +211,30 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     if (!editBm?.bm.id) return;
     setIsSavingBm(true);
     const originalValue = editBm.bm.is_edited ? editBm.bm.original_value : editBm.bm.value;
-    await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag, originalValue });
-    // Update local state
+    const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag, originalValue });
+    if (ok) {
+      // ── Persist to localStorage so this edit survives any re-render ──────
+      const canonicalName = normalizeBiomarkerName(editBm.bm.name);
+      const study = studies.find(s => s.id === editBm.studyId);
+      const studyDate = study ? (
+        (study as any).exam_date ??
+        study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ??
+        study.created_at
+      ).slice(0, 10) : '';
+      if (studyDate) {
+        saveOverride({
+          patientId: id,
+          studyId: editBm.studyId,
+          biomarkerId: editBm.bm.id,
+          canonicalName,
+          studyDate,
+          value: editValue,
+          numValue: parseFloat(editValue.replace(',', '.')) || 0,
+          flag: editFlag,
+        });
+      }
+    }
+    // Update local state immediately — do NOT reload from DB
     setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
       ...s,
       biomarkers: (s.biomarkers as Biomarker[]).map(b =>
@@ -184,6 +249,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         )
       } : prev);
     }
+    // NOTE: Do NOT call autoBuildCanonical() here — it triggers loadStudies()
+    // which would overwrite the local state we just set.
     setIsSavingBm(false);
     setEditBm(null);
   };
@@ -236,7 +303,36 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     return () => clearInterval(undoTimerRef.current!);
   }, [mergeUndo?.target?.id]); // reset only when a new merge happens
 
-  useEffect(() => { loadPatient(); loadStudies(); loadProgress(); }, [id]);
+  useEffect(() => { loadPatient(); loadStudies(); loadProgress(); loadDocuments(); }, [id]);
+
+  const autoBuildCanonical = async () => {
+    setIsBuildingCanonical(true);
+    setCanonicalMsg(null);
+    try {
+      const res = await fetch('/api/build-canonical', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setCanonicalMsg(data.message ?? '✅ Tabla canónica construida');
+      // CRITICAL: Do NOT call loadStudies() here.
+      // The canonical build only updates canonical_name and canonical_system fields.
+      // It does NOT touch value, flag, or is_edited.
+      // Calling loadStudies() would overwrite any manually edited values in local state
+      // with the original DB data, causing the "reversion" bug.
+    } catch (err: any) {
+      setCanonicalMsg(`❌ Error: ${err.message}`);
+      console.error('Error auto-building canonical:', err);
+    } finally {
+      setIsBuildingCanonical(false);
+    }
+  };
+
+  const handleBuildCanonical = async () => {
+    await autoBuildCanonical();
+  };
 
   const loadPatient = async () => {
     const data = await getPatientById(id);
@@ -250,8 +346,14 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     const data = await getStudiesWithBiomarkers(id);
     setStudies(data);
     if (data.length > 0) {
-      // Always show the most recent study in the left panel
-      const newest = data[0];
+      // Sort by exam date to find the true newest study (not by created_at)
+      const getStudyDate = (s: Study) => {
+        const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+        const raw = (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+        return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
+      };
+      const sorted = [...data].sort((a, b) => new Date(getStudyDate(b)).getTime() - new Date(getStudyDate(a)).getTime());
+      const newest = sorted[0];
       setActiveStudyId(newest.id);
       setAnalysisResult({ biomarkers: (newest.biomarkers ?? []) as Biomarker[], summary: newest.summary });
     }
@@ -262,11 +364,47 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       getInterviewAnswers(id),
       getReportModules(id),
     ]);
-    const answered = Object.keys(answers).length;
+    const answered = ALL_SECTIONS.flatMap(s => s.questions.filter(q => q.id && !HIDDEN_QUESTION_IDS.includes(q.id)))
+      .filter(q => answers[q.id!] && answers[q.id!] !== '').length;
     setInterviewPct(Math.min(100, Math.round((answered / TOTAL_QUESTIONS) * 100)));
     const approved = reportMods.filter(m => m.status === 'approved').length;
     const generated = reportMods.length;
     setReportPct(Math.round(((approved * 2 + (generated - approved)) / 10) * 100));
+  };
+
+  const loadDocuments = async () => {
+    try {
+      const res = await fetch(`/api/pacientes/${id}/documents`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data);
+      }
+    } catch (e) {
+      console.error("Error loading patient documents:", e);
+    }
+  };
+
+  const handleAttachDocument = async (studyId: string, file: File) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('file_type', 'estudio_sangre');
+      formData.append('notes', `Documento original de estudio adjuntado manualmente`);
+      formData.append('study_id', studyId);
+
+      const res = await fetch(`/api/pacientes/${id}/documents`, {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        await loadDocuments();
+      } else {
+        alert('Error al adjuntar el documento');
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Error de red al adjuntar el documento');
+    }
   };
 
   const handleUpdatePatient = async (e: React.FormEvent) => {
@@ -373,6 +511,25 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           })();
           await createBiomarkers(study.id, aiData.biomarkers);
 
+          // Auto-save original study file to patient documents
+          const docFormData = new FormData();
+          docFormData.append('file', file);
+          docFormData.append('file_type', 'estudio_sangre');
+          docFormData.append('notes', `Estudio de sangre analizado por IA el ${new Date().toLocaleDateString('es-MX')}`);
+          docFormData.append('study_id', study.id);
+
+          try {
+            const uploadRes = await fetch(`/api/pacientes/${id}/documents`, {
+              method: 'POST',
+              body: docFormData
+            });
+            if (!uploadRes.ok) {
+              console.error("Failed to auto-upload original study to patient documents");
+            }
+          } catch (e) {
+            console.error("Error auto-uploading original study:", e);
+          }
+
           // Show audit result
           const audit = aiData.audit;
           if (audit) {
@@ -390,7 +547,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       }
     }
 
-    await loadStudies();
+    await loadStudies(); // reload after structural change
+    await loadDocuments();
+    await autoBuildCanonical();
     setIsAnalyzing(false);
     setTimeout(() => setUploadQueue([]), 8000);
   };
@@ -427,21 +586,28 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
   // ─── Smart Biomarker Search ──────────────────────────────────────────────────
   const scrollToMarker = (elementId: string, targetTab: typeof activeTab, studyId?: string) => {
-    // Explicitly scroll the left panel container — scrollIntoView picks the wrong ancestor
+    // Explicitly scroll the correct panel container — scrollIntoView picks the wrong ancestor
     const tryScroll = (attemptsLeft: number) => {
       const el = document.getElementById(elementId);
-      if (el) {
-        const panel = document.getElementById('pdi-left-scroll');
-        if (panel) {
-          const panelRect = panel.getBoundingClientRect();
-          const elRect = el.getBoundingClientRect();
-          const scrollTarget = elRect.top - panelRect.top + panel.scrollTop - panel.clientHeight / 2 + el.clientHeight / 2;
-          panel.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
-        } else {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const panel = targetTab === 'tabla'
+        ? document.getElementById('pdi-master-table-scroll')
+        : document.getElementById('pdi-left-scroll');
+
+      const elRect = el?.getBoundingClientRect();
+      const panelRect = panel?.getBoundingClientRect();
+      const isLayoutReady = el && panel && elRect && panelRect && elRect.height > 0 && panelRect.height > 0;
+
+      if (isLayoutReady) {
+        if (targetTab === 'tabla') {
+          const leftPanel = document.getElementById('pdi-left-scroll');
+          if (leftPanel) {
+            leftPanel.scrollTo({ top: 0, behavior: 'smooth' });
+          }
         }
+        const scrollTarget = elRect.top - panelRect.top + panel.scrollTop - panel.clientHeight / 2 + el.clientHeight / 2;
+        panel.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
         setGlowId(elementId);
-        setTimeout(() => setGlowId(null), 2800);
+        setTimeout(() => setGlowId(null), 10000); // Highlight for 10 seconds
       } else if (attemptsLeft > 0) {
         setTimeout(() => tryScroll(attemptsLeft - 1), 120);
       }
@@ -453,7 +619,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       setActiveTab(targetTab);
       if (targetTab === 'tabla') setIsTreeOpen(false);
       else setIsTreeOpen(true);
-      setTimeout(() => tryScroll(5), 350);
+      setTimeout(() => tryScroll(8), 300); // Give 8 retries (almost 1 sec) for rendering tab switch
       return;
     }
     // If the result belongs to a specific study, activate it first, then scroll after render
@@ -463,9 +629,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         setActiveStudyId(studyId);
         setAnalysisResult({ biomarkers: (targetStudy.biomarkers ?? []) as Biomarker[], summary: targetStudy.summary });
       }
-      setTimeout(() => tryScroll(5), 350);
+      setTimeout(() => tryScroll(8), 300);
     } else {
-      setTimeout(() => tryScroll(3), 80);
+      setTimeout(() => tryScroll(5), 80);
     }
   };
 
@@ -475,27 +641,50 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     const results: { id: string; studyId?: string; label: string; sub: string; type: 'study' | 'chart' | 'tabla'; targetTab: typeof activeTab }[] = [];
 
     if (activeTab === 'estudios') {
-      // One result per study that has the matching marker
+      // One result per (study × canonical biomarker) — apply overrides so corrected values show
+      const allOverrides = (() => {
+        try {
+          const raw = localStorage.getItem('pdi_biomarker_overrides_v1');
+          return raw ? (JSON.parse(raw) as any[]).filter((o: any) => o.patientId === id) : [];
+        } catch { return []; }
+      })();
+
       studies.forEach(s => {
         const rawDate = (s as any).exam_date ?? null;
         const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-        const displayDate = (rawDate ?? fileDate)
-          ? new Date((rawDate ?? fileDate) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+        const studyDate = (rawDate ?? fileDate ?? s.created_at ?? '').slice(0, 10);
+        const displayDate = studyDate
+          ? new Date(studyDate + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
           : new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        // Deduplicate by canonical name within this study — first entry wins unless overridden
+        const seenInStudy = new Set<string>();
         (s.biomarkers ?? []).forEach(bm => {
-          if (bm.name.toLowerCase().includes(q)) {
-            const elemId = studyBiomarkerElementId(s.id, bm.name);
-            results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${bm.value} ${bm.unit}`, type: 'study', targetTab: 'estudios' });
-          }
+          const canonical = normalizeBiomarkerName(bm.name);
+          const matches = bm.name.toLowerCase().includes(q) || canonical.toLowerCase().includes(q);
+          if (!matches) return;
+          if (seenInStudy.has(canonical)) return;
+          seenInStudy.add(canonical);
+
+          // Apply override if one exists for this canonical + study date
+          const override = allOverrides.find((o: any) => o.canonicalName === canonical && o.studyDate === studyDate);
+          const displayValue = override ? `${override.value} ${bm.unit}` : `${bm.value} ${bm.unit}`;
+          const editedMark = override ? ' ✏️' : '';
+
+          const elemId = studyBiomarkerElementId(s.id, bm.name);
+          results.push({ id: elemId, studyId: s.id, label: bm.name, sub: `📊 Estudio del ${displayDate} · ${displayValue}${editedMark}`, type: 'study', targetTab: 'estudios' });
         });
       });
     } else if (activeTab === 'evolucion') {
       // One result per canonical biomarker name (deduplicated)
+      // Match against BOTH the raw name AND the canonical name so users can
+      // search "PCR" and find "Proteína C Reactiva Ultrasensible" (or vice versa)
       const seen = new Set<string>();
       studies.forEach(s => {
         (s.biomarkers ?? []).forEach(bm => {
           const canonical = normalizeBiomarkerName(bm.name);
-          if (bm.name.toLowerCase().includes(q) && !seen.has(canonical)) {
+          const matches = bm.name.toLowerCase().includes(q) || canonical.toLowerCase().includes(q);
+          if (matches && !seen.has(canonical)) {
             seen.add(canonical);
             results.push({ id: chartBiomarkerElementId(bm.name), label: canonical, sub: `📈 Gráfica de evolución clínica`, type: 'chart', targetTab: 'evolucion' });
           }
@@ -503,11 +692,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       });
     } else if (activeTab === 'tabla') {
       // One result per canonical name (row in the master table)
+      // Match against BOTH the raw name AND the canonical name
       const seen = new Set<string>();
       studies.forEach(s => {
         (s.biomarkers ?? []).forEach(bm => {
           const canonical = normalizeBiomarkerName(bm.name);
-          if (bm.name.toLowerCase().includes(q) && !seen.has(canonical)) {
+          const matches = bm.name.toLowerCase().includes(q) || canonical.toLowerCase().includes(q);
+          if (matches && !seen.has(canonical)) {
             seen.add(canonical);
             results.push({ id: tablaBiomarkerElementId(canonical), label: canonical, sub: `🧬 Fila en Tabla Maestra`, type: 'tabla', targetTab: 'tabla' });
           }
@@ -548,11 +739,89 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const alteredCount = analysisResult?.biomarkers.filter(b => b.flag !== 'Normal').length ?? 0;
 
   // ─── Build series for Comparative Modal ──────────────────────────────────────
-  // readySeriesMap is populated by EvolutionCharts via onSeriesReady — same data
-  // the sparklines show, with all deduplication and IQR processing already applied.
-  const comparativeSeries = [...selectedForCompare]
-    .map(name => readySeriesMap[name])
-    .filter(Boolean) as { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }[];
+  // Primary: readySeriesMap populated by EvolutionCharts (deduped + overrides applied).
+  // Fallback: build inline with median-dedup + localStorage overrides, so the modal
+  //           never shows stale Supabase values even before EvolutionCharts fires.
+  const comparativeSeries = useMemo(() => {
+    const getStudyDate = (s: any) => {
+      const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+      const raw = s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at);
+      return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
+    };
+    const allOverrides = (() => {
+      try {
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('pdi_biomarker_overrides_v1') : null;
+        return raw ? (JSON.parse(raw) as any[]).filter((o: any) => o.patientId === id) : [];
+      } catch { return []; }
+    })();
+
+    // Helper: apply localStorage overrides to the points of an already-built series.
+    // This is the final safety net — even if readySeriesMap has the raw Supabase value
+    // (e.g. 164 /uL for Monocitos), the override (4.1) always wins.
+    const applyOverridesToSeries = (series: typeof readySeriesMap[string]) => {
+      const updatedPoints = series.points.map(pt => {
+        const studyDate = pt.date.slice(0, 10);
+        const override = allOverrides.find(
+          (o: any) => o.canonicalName === series.name && o.studyDate === studyDate
+        );
+        if (!override) return pt;
+        return {
+          ...pt,
+          value: override.numValue ?? parseFloat(override.value),
+          flag: override.flag as string,
+          isEdited: true,
+        };
+      });
+      return { ...series, points: updatedPoints };
+    };
+
+    return [...selectedForCompare].map(name => {
+      // Prefer the already-processed series from EvolutionCharts, but ALWAYS
+      // apply localStorage overrides on top to guard against timing races.
+      if (readySeriesMap[name]) return applyOverridesToSeries(readySeriesMap[name]);
+
+      // Fallback: build series inline
+      const raw: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; isEdited?: boolean }[] = [];
+      for (const study of studies) {
+        const dateStr = getStudyDate(study);
+        const studyDate = dateStr.slice(0, 10);
+        for (const bm of (study.biomarkers ?? [])) {
+          const canonical = normalizeBiomarkerName(bm.name);
+          if (canonical !== name) continue;
+          const numVal = parseFloat(bm.value);
+          if (isNaN(numVal)) continue;
+          // Check override
+          const override = allOverrides.find((o: any) => o.canonicalName === canonical && o.studyDate === studyDate);
+          raw.push({ date: dateStr, value: override ? override.numValue ?? parseFloat(override.value) : numVal, flag: override ? override.flag : bm.flag, biomarkerId: (bm as any).id, studyId: study.id, isEdited: !!override || (bm as any).is_edited });
+        }
+      }
+      if (!raw.length) return null;
+
+      // Median-dedup: same logic as EvolutionCharts
+      const sortedVals = [...raw].map(p => p.value).sort((a, b) => a - b);
+      const median = sortedVals[Math.floor(sortedVals.length / 2)];
+      const byDay = new Map<string, typeof raw[0]>();
+      for (const pt of raw) {
+        const key = pt.date.slice(0, 10);
+        const existing = byDay.get(key);
+        if (!existing) { byDay.set(key, pt); }
+        else if (pt.isEdited && !existing.isEdited) { byDay.set(key, pt); }
+        else if (!pt.isEdited && existing.isEdited) { /* keep */ }
+        else if (Math.abs(pt.value - median) < Math.abs(existing.value - median)) { byDay.set(key, pt); }
+      }
+      const points = [...byDay.values()].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      // Find unit and referenceRange from the first matching biomarker
+      let unit = '', referenceRange = '';
+      for (const study of studies) {
+        for (const bm of (study.biomarkers ?? [])) {
+          if (normalizeBiomarkerName(bm.name) === name) { unit = bm.unit ?? ''; referenceRange = (bm as any).referenceRange ?? (bm as any).reference_range ?? ''; break; }
+        }
+        if (unit) break;
+      }
+      return { name, unit, referenceRange, points };
+    }).filter(Boolean) as { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string }[] }[];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedForCompare, readySeriesMap, studies, id]);
 
   if (loading || !patient) {
     return <div style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}><p>Cargando expediente...</p></div>;
@@ -640,9 +909,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       {showComparativeModal && selectedForCompare.size > 0 && (
         <ComparativeModal
           series={comparativeSeries}
+          patientId={id}
           onClose={() => setShowComparativeModal(false)}
           onAddToReport={handleAddToReport}
           onValueUpdated={handleBiomarkerUpdated}
+          documents={documents}
         />
       )}
 
@@ -936,25 +1207,47 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
       {/* Glow CSS */}
       <style>{`
-        @keyframes pdi-glow { 0%,100%{box-shadow:0 0 0 rgba(212,175,55,0)} 30%{box-shadow:0 0 0 4px rgba(212,175,55,0.5),0 0 24px rgba(212,175,55,0.3)} }
-        .pdi-glow-active { animation: pdi-glow 2.5s ease !important; border-color: rgba(212,175,55,0.8) !important; }
+        @keyframes pdi-glow {
+          0%   { box-shadow: 0 0 0 rgba(212,175,55,0); transform: scale(1); }
+          8%   { box-shadow: 0 0 0 6px rgba(212,175,55,0.7), 0 0 40px 8px rgba(212,175,55,0.5), 0 0 80px 16px rgba(212,175,55,0.2); transform: scale(1.03); }
+          20%  { box-shadow: 0 0 0 4px rgba(212,175,55,0.4), 0 0 24px 4px rgba(212,175,55,0.25); transform: scale(1.01); }
+          35%  { box-shadow: 0 0 0 6px rgba(212,175,55,0.65), 0 0 40px 8px rgba(212,175,55,0.4), 0 0 80px 16px rgba(212,175,55,0.15); transform: scale(1.025); }
+          50%  { box-shadow: 0 0 0 3px rgba(212,175,55,0.3), 0 0 16px 2px rgba(212,175,55,0.2); transform: scale(1); }
+          65%  { box-shadow: 0 0 0 5px rgba(212,175,55,0.5), 0 0 30px 6px rgba(212,175,55,0.3); transform: scale(1.015); }
+          82%  { box-shadow: 0 0 0 2px rgba(212,175,55,0.25), 0 0 12px rgba(212,175,55,0.15); transform: scale(1); }
+          100% { box-shadow: 0 0 0 2px rgba(212,175,55,0.35), 0 0 12px rgba(212,175,55,0.12); transform: scale(1); }
+        }
+        .pdi-glow-active {
+          animation: pdi-glow 6s cubic-bezier(0.4,0,0.2,1) forwards !important;
+          border: 2px solid rgba(212,175,55,0.95) !important;
+          background: rgba(212,175,55,0.06) !important;
+          z-index: 2;
+          position: relative;
+        }
+        .pdi-glow-active::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          background: linear-gradient(135deg, rgba(212,175,55,0.18) 0%, transparent 60%);
+          pointer-events: none;
+          z-index: 1;
+        }
       `}</style>
 
-      {/* ── Main Grid — dual scroll ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: isTreeOpen ? '1fr 400px' : '1fr 0px', gap: 0, flex: 1, overflow: 'hidden', transition: 'grid-template-columns 0.35s cubic-bezier(0.4,0,0.2,1)' }}>
+      {/* ── Main content area ── */}
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
-        {/* ── LEFT: scrollable independently ── */}
-        <div id="pdi-left-scroll" style={{ overflowY: 'auto', padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        {/* ── Content ── */}
+        <div id="pdi-left-scroll" style={{ padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
           {/* ── Tab bar ── */}
           <div style={{ display: 'flex', gap: 4, padding: '4px', borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', width: 'fit-content' }}>
-            {([['estudios', '📊 Estudios'], ['evolucion', '📈 Evolución Clínica'], ['tabla', '🧬 Tabla Maestra'], ['consulta', '🤖 Consulta IA']] as const).map(([tab, label]) => (
+            {([['estudios', '📊 Estudios'], ['evolucion', '📈 Evolución Clínica'], ['tabla', '🧬 Tabla Maestra'], ['consulta', '🤖 Consulta IA'], ['documentos', '📂 Documentos']] as const).map(([tab, label]) => (
               <button
                 key={tab}
                 onClick={() => {
                   setActiveTab(tab);
-                  if (tab === 'tabla') setIsTreeOpen(false);
-                  else if (tab !== 'consulta') setIsTreeOpen(true);
                 }}
                 style={{ padding: '8px 20px', borderRadius: 9, border: 'none', background: activeTab === tab ? 'var(--gold-primary)' : 'transparent', color: activeTab === tab ? '#000' : 'var(--text-muted)', cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: 13, fontWeight: 700, transition: 'all 0.2s', letterSpacing: '0.01em', whiteSpace: 'nowrap' }}
               >
@@ -962,6 +1255,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               </button>
             ))}
           </div>
+
+
 
           {/* ── Evolución Clínica tab ── */}
           {activeTab === 'evolucion' && (
@@ -987,12 +1282,14 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   </div>
                   <EvolutionCharts
                     studies={studies}
+                    patientId={id}
                     glowId={glowId}
                     compareMode={isCompareMode}
                     selectedForCompare={selectedForCompare}
                     onToggleCompare={toggleSelectForCompare}
                     showOnlySuspicious={showOnlySuspiciousCharts}
                     onSeriesReady={setReadySeriesMap}
+                    documents={documents}
                     onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
                       handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId);
                     }}
@@ -1009,8 +1306,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             <section style={styles.card}>
               <BiomarkerMasterTable
                 studies={studies}
+                patientId={id}
                 patientBirthDate={patient?.birth_date}
                 glowId={glowId}
+                documents={documents}
                 onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) =>
                   handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId)
                 }
@@ -1072,6 +1371,242 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             </section>
           )}
 
+          {/* ── Documentos tab ── */}
+          {activeTab === 'documentos' && (
+            <section style={styles.card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <FolderOpen color="var(--gold-primary)" size={22} />
+                  <div>
+                    <h2 style={{ fontSize: '18px', margin: 0, color: 'var(--text-primary)', fontFamily: 'var(--font-main)' }}>Expediente de Documentos</h2>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0' }}>Estudios, retinografías y archivos de soporte del paciente</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowUploadForm(o => !o)}
+                  style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: showUploadForm ? 'rgba(255,255,255,0.06)' : 'var(--gold-primary)', color: showUploadForm ? 'var(--text-primary)' : '#000', cursor: 'pointer', fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px', transition: 'all 0.2s' }}
+                >
+                  {showUploadForm ? '✕ Cancelar' : '＋ Subir Documento'}
+                </button>
+              </div>
+
+              {/* Upload Form Box */}
+              {showUploadForm && (
+                <div style={{ background: 'rgba(255,255,255,0.02)', padding: '20px', borderRadius: '12px', border: '1px solid var(--border-subtle)', marginBottom: '24px' }}>
+                  <h3 style={{ margin: '0 0 16px', fontSize: '13px', color: 'var(--gold-primary)', textTransform: 'uppercase', letterSpacing: '1px' }}>Nuevo Documento</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', gridTemplateRows: 'auto' }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px', fontWeight: 600 }}>Tipo de Documento:</label>
+                        <select
+                          value={manualDocType}
+                          onChange={e => setManualDocType(e.target.value)}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'var(--font-main)' }}
+                        >
+                          <option value="estudio_sangre">Estudio de sangre</option>
+                          <option value="retinografia">Retinografía</option>
+                          <option value="otros">Otro / Soporte</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px', fontWeight: 600 }}>Seleccionar Archivo:</label>
+                        <input
+                          type="file"
+                          onChange={e => setManualDocFile(e.target.files?.[0] ?? null)}
+                          style={{ width: '100%', fontSize: '12px', color: 'var(--text-muted)' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px', fontWeight: 600 }}>Notas u Observaciones (opcional):</label>
+                      <input
+                        type="text"
+                        placeholder="Ej: Radiografía de tórax de control, Retinografía ojo izquierdo..."
+                        value={manualDocNotes}
+                        onChange={e => setManualDocNotes(e.target.value)}
+                        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'var(--font-main)', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!manualDocFile) { alert('Por favor seleccione un archivo'); return; }
+                        setIsUploadingDocument(true);
+                        const formData = new FormData();
+                        formData.append('file', manualDocFile);
+                        formData.append('file_type', manualDocType);
+                        formData.append('notes', manualDocNotes);
+                        try {
+                          const res = await fetch(`/api/pacientes/${id}/documents`, {
+                            method: 'POST',
+                            body: formData
+                          });
+                          if (res.ok) {
+                            setManualDocFile(null);
+                            setManualDocNotes('');
+                            setShowUploadForm(false);
+                            loadDocuments();
+                          } else {
+                            alert('Error al subir el documento');
+                          }
+                        } catch (e) {
+                          console.error(e);
+                          alert('Error de red al subir documento');
+                        } finally {
+                          setIsUploadingDocument(false);
+                        }
+                      }}
+                      disabled={isUploadingDocument || !manualDocFile}
+                      style={{ padding: '10px 20px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: (isUploadingDocument || !manualDocFile) ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', width: 'fit-content', marginTop: '6px' }}
+                    >
+                      {isUploadingDocument ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+                      {isUploadingDocument ? 'Subiendo...' : 'Subir y Guardar'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Filters & Search Header */}
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {/* Search query input */}
+                <div style={{ position: 'relative', flex: 1, minWidth: '240px' }}>
+                  <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>
+                    <Search size={16} />
+                  </span>
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre o notas..."
+                    value={documentSearchQuery}
+                    onChange={e => setDocumentSearchQuery(e.target.value)}
+                    style={{ width: '100%', padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'var(--bg-main)', color: 'var(--text-primary)', fontSize: '13px', fontFamily: 'var(--font-main)', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                {/* Filter tags */}
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  {[
+                    ['todos', 'Todos'],
+                    ['estudio_sangre', 'Estudios de Sangre'],
+                    ['retinografia', 'Retinografías'],
+                    ['otros', 'Otros']
+                  ].map(([type, label]) => {
+                    const isSelected = documentFilterType === type;
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => setDocumentFilterType(type)}
+                        style={{
+                          padding: '6px 14px', borderRadius: '99px', fontSize: '11px', cursor: 'pointer', fontFamily: 'var(--font-main)', fontWeight: 600,
+                          border: `1px solid ${isSelected ? 'var(--gold-primary)' : 'var(--border-subtle)'}`,
+                          background: isSelected ? 'rgba(212,175,55,0.1)' : 'transparent',
+                          color: isSelected ? 'var(--gold-primary)' : 'var(--text-muted)',
+                          transition: 'all 0.15s'
+                        }}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Documents Grid */}
+              {(() => {
+                const filteredDocs = documents.filter(doc => {
+                  const matchesType = documentFilterType === 'todos' || doc.file_type === documentFilterType;
+                  const matchesSearch = !documentSearchQuery.trim() ||
+                    doc.file_name.toLowerCase().includes(documentSearchQuery.toLowerCase()) ||
+                    (doc.notes && doc.notes.toLowerCase().includes(documentSearchQuery.toLowerCase()));
+                  return matchesType && matchesSearch;
+                });
+
+                if (filteredDocs.length === 0) {
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', border: '1px dashed var(--border-subtle)', borderRadius: '12px', width: '100%' }}>
+                      <FileText size={36} color="var(--text-muted)" style={{ opacity: 0.4, marginBottom: '12px' }} />
+                      <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-muted)' }}>No se encontraron documentos en esta sección.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '14px' }}>
+                    {filteredDocs.map((doc: any) => {
+                      const badgeColors: Record<string, { bg: string, text: string, label: string }> = {
+                        estudio_sangre: { bg: 'rgba(34,197,94,0.12)', text: '#4ade80', label: '🩸 Estudio de Sangre' },
+                        retinografia: { bg: 'rgba(168,85,247,0.12)', text: '#c084fc', label: '👁️ Retinografía' },
+                        otros: { bg: 'rgba(59,130,246,0.12)', text: '#60a5fa', label: '📂 Soporte / Otros' }
+                      };
+                      const badge = badgeColors[doc.file_type] || badgeColors.otros;
+
+                      return (
+                        <div key={doc.id} style={{ padding: '16px', borderRadius: '12px', background: 'var(--bg-main)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '12px' }}>
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: badge.bg, color: badge.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{badge.label}</span>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{(doc.file_size / 1024).toFixed(1)} KB</span>
+                            </div>
+                            <h4 style={{ margin: '0 0 4px', fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', wordBreak: 'break-all' }}>{doc.file_name}</h4>
+                            <p style={{ margin: '0 0 8px', fontSize: '10px', color: 'var(--text-muted)' }}>Subido: {new Date(doc.uploaded_at).toLocaleString()}</p>
+                            {doc.notes && (
+                              <p style={{ margin: '0', fontSize: '11px', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.01)', padding: '6px 10px', borderRadius: '6px', borderLeft: '2px solid var(--border-strong)' }}>{doc.notes}</p>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid rgba(255,255,255,0.03)', paddingTop: '10px', marginTop: '4px' }}>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <a
+                                href={doc.public_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--gold-primary)', fontWeight: 700, textDecoration: 'none', background: 'rgba(212,175,55,0.1)', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(212,175,55,0.2)' }}
+                              >
+                                <Eye size={12} /> Ver
+                              </a>
+
+                              {doc.study_id && (
+                                <button
+                                  onClick={() => {
+                                    setActiveTab('estudios');
+                                    setActiveStudyId(doc.study_id);
+                                  }}
+                                  style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#60a5fa', fontWeight: 700, textDecoration: 'none', background: 'rgba(59,130,246,0.1)', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(59,130,246,0.2)', cursor: 'pointer', fontFamily: 'var(--font-main)' }}
+                                >
+                                  🔗 Estudio IA
+                                </button>
+                              )}
+                            </div>
+
+                            <button
+                              onClick={async () => {
+                                if (!confirm('¿Eliminar este documento permanentemente?')) return;
+                                try {
+                                  const res = await fetch(`/api/pacientes/${id}/documents?docId=${doc.id}`, {
+                                    method: 'DELETE'
+                                  });
+                                  if (res.ok) {
+                                    loadDocuments();
+                                  } else {
+                                    alert('Error al eliminar el documento');
+                                  }
+                                } catch (e) {
+                                  console.error(e);
+                                  alert('Error de red al eliminar');
+                                }
+                              }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#f87171', background: 'rgba(239,68,68,0.1)', padding: '4px 8px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)' }}
+                            >
+                              <Trash2 size={12} /> Borrar
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </section>
+          )}
+
           {/* ── Estudios & Evolución tab ── */}
           {activeTab === 'estudios' && <>
 
@@ -1114,7 +1649,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   await createBiomarkers(target.id, src.biomarkers as any ?? []);
                   await deleteStudy(src.id);
                 }
-                await loadStudies();
+                await loadStudies(); // reload after structural change
+                await autoBuildCanonical();
 
                 // --- Arm undo ---
                 clearInterval(undoTimerRef.current!);
@@ -1133,7 +1669,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                   const newStudy = await createStudy(id, src.file_name, src.summary);
                   if (newStudy) await createBiomarkers(newStudy.id, src.biomarkers);
                 }
-                await loadStudies();
+                await loadStudies(); // reload after structural change
+                await autoBuildCanonical();
               };
 
               return (
@@ -1163,6 +1700,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                         : null;
                       const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
                       const isActive = activeStudyId === s.id;
+                      const originalDoc = documents.find(d => d.study_id === s.id || (s.file_name && d.file_name === s.file_name));
                       return (
                         <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
                           <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}>
@@ -1175,16 +1713,53 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                               <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate}</span>
                             )}
                           </button>
-                          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, paddingRight: '8px', gap: '4px' }}>
+                            {originalDoc && (
+                              <a
+                                href={originalDoc.public_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Ver archivo original"
+                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold-primary)', cursor: 'pointer', transition: 'all 0.2s' }}
+                              >
+                                <Eye size={12} />
+                              </a>
+                            )}
+                            {!originalDoc && (
+                              <label
+                                title="Adjuntar PDF de estudio original"
+                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-muted)', cursor: 'pointer', transition: 'all 0.2s' }}
+                                onMouseEnter={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'var(--gold-primary)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--gold-primary)'; }}
+                                onMouseLeave={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'rgba(255,255,255,0.1)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--text-muted)'; }}
+                              >
+                                <Paperclip size={12} />
+                                <input
+                                  type="file"
+                                  accept="application/pdf"
+                                  style={{ display: 'none' }}
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    await handleAttachDocument(s.id, file);
+                                  }}
+                                />
+                              </label>
+                            )}
                             {deleteConfirmId === s.id ? (
                               <>
                                 <button
                                   onClick={async () => {
                                     setDeleteConfirmId(null);
                                     try {
+                                      const relatedDoc = documents.find(d => d.study_id === s.id || (s.file_name && d.file_name === s.file_name));
+                                      if (relatedDoc) {
+                                        await fetch(`/api/pacientes/${id}/documents?docId=${relatedDoc.id}`, { method: 'DELETE' });
+                                      }
                                       await deleteStudy(s.id);
                                       if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
-                                      await loadStudies();
+                                      await loadStudies(); // reload after structural change
+                                      await loadDocuments();
+                                      await autoBuildCanonical();
                                     } catch (err: any) {
                                       showError(`Error al eliminar: ${err.message}`);
                                     }
@@ -1282,7 +1857,31 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
           {/* Global Biomarker Cards — grouped by system (uses most recent study) */}
           {analysisResult && studies.length > 0 && (() => {
-            const activeBms: Biomarker[] = (studies.find(s => s.id === activeStudyId)?.biomarkers ?? studies[0]?.biomarkers ?? []) as Biomarker[];
+            const rawActiveBms: Biomarker[] = (studies.find(s => s.id === activeStudyId)?.biomarkers ?? latestStudy?.biomarkers ?? []) as Biomarker[];
+
+            // \u2500\u2500 Apply localStorage overrides (same source of truth as charts + table) \u2500\u2500
+            // Find the study date for the active study so we can match override records
+            const activeStudy = studies.find(s => s.id === activeStudyId) ?? latestStudy;
+            const activeStudyDate = activeStudy ? (() => {
+              const fd = (activeStudy as any).file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+              const raw = (activeStudy as any).exam_date ?? (fd ? fd + 'T12:00:00' : (activeStudy as any).created_at);
+              return raw ? String(raw).slice(0, 10) : '';
+            })() : '';
+            const studyOverrides = (() => {
+              try {
+                const key = `pdi_biomarker_overrides_v1`;
+                const raw = localStorage.getItem(key);
+                if (!raw) return [] as any[];
+                return (JSON.parse(raw) as any[]).filter(o => o.patientId === id && o.studyDate === activeStudyDate);
+              } catch { return [] as any[]; }
+            })();
+            const activeBms: Biomarker[] = rawActiveBms.map(b => {
+              const canonical = normalizeBiomarkerName(b.name);
+              const override = studyOverrides.find((o: any) => o.canonicalName === canonical);
+              if (!override) return b;
+              return { ...b, value: override.value, flag: override.flag, is_edited: true, original_value: (b as any).original_value ?? b.value } as Biomarker;
+            });
+
             const alteredInStudy = activeBms.filter(b => b.flag !== 'Normal').length;
             const editedInStudy = activeBms.filter(b => b.is_edited).length;
 
@@ -1328,77 +1927,156 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             }, {});
 
             return <>
-              {/* Filter bar */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Filtrar:</span>
-                {([
-                  ['all', `Todo (${activeBms.length})`, 'var(--text-secondary)', 'rgba(255,255,255,0.06)'],
-                  ['altered', `⚠️ Alterados (${alteredInStudy})`, '#ef4444', 'rgba(239,68,68,0.12)'],
-                  ['edited', `✏️ Editados (${editedInStudy})`, 'var(--gold-primary)', 'rgba(212,175,55,0.12)'],
-                  ['suspicious', `◇ Sospechosos (${suspiciousInStudy})`, '#f97316', 'rgba(249,115,22,0.12)'],
-                ] as const).map(([mode, label, color, bg]) => (
-                  <button key={mode} onClick={() => setBmFilter(mode)} style={{
-                    padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
-                    fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
-                    border: `1px solid ${bmFilter === mode ? color : 'var(--border-subtle)'}`,
-                    background: bmFilter === mode ? bg : 'transparent',
-                    color: bmFilter === mode ? color : 'var(--text-muted)',
-                  }}>{label}</button>
-                ))}
+              {/* Filter & View Bar */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', background: 'rgba(255,255,255,0.02)', padding: '10px 14px', borderRadius: '12px', border: '1px solid var(--border-subtle)', marginBottom: '16px' }}>
+                {/* Left side: filter buttons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Filtrar:</span>
+                  {([
+                    ['all', `Todo (${activeBms.length})`, 'var(--text-secondary)', 'rgba(255,255,255,0.06)'],
+                    ['altered', `⚠️ Alterados (${alteredInStudy})`, '#ef4444', 'rgba(239,68,68,0.12)'],
+                    ['edited', `✏️ Editados (${editedInStudy})`, 'var(--gold-primary)', 'rgba(212,175,55,0.12)'],
+                    ['suspicious', `◇ Sospechosos (${suspiciousInStudy})`, '#f97316', 'rgba(249,115,22,0.12)'],
+                  ] as const).map(([mode, label, color, bg]) => (
+                    <button key={mode} onClick={() => setBmFilter(mode)} style={{
+                      padding: '5px 12px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                      fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                      border: `1px solid ${bmFilter === mode ? color : 'var(--border-subtle)'}`,
+                      background: bmFilter === mode ? bg : 'transparent',
+                      color: bmFilter === mode ? color : 'var(--text-muted)',
+                    }}>{label}</button>
+                  ))}
+                </div>
+
+                <div style={{ width: '1px', height: '16px', background: 'var(--border-subtle)' }} className="pdi-filter-divider" />
+
+                {/* Right side: view mode toggle buttons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Vista:</span>
+                  {(['systems', 'original'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => setViewMode(mode)}
+                      style={{
+                        padding: '5px 12px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                        fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                        border: `1px solid ${viewMode === mode ? 'var(--gold-primary)' : 'var(--border-subtle)'}`,
+                        background: viewMode === mode ? 'rgba(212,175,55,0.12)' : 'transparent',
+                        color: viewMode === mode ? 'var(--gold-primary)' : 'var(--text-muted)',
+                      }}
+                    >
+                      {mode === 'systems' ? '📁 Por Sistemas' : '📄 Orden del Estudio'}
+                    </button>
+                  ))}
+                </div>
+
                 {bmFilter !== 'all' && filteredBms.length === 0 && (
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic' }}>Ningún biomarcador en esta categoría.</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontStyle: 'italic', marginLeft: 'auto' }}>Ningún biomarcador.</span>
                 )}
                 {bmFilter === 'suspicious' && suspiciousInStudy === 0 && studies.length < 5 && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>(Se necesitan ≥5 estudios con el mismo marcador para calcular sospechosos.)</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', marginLeft: 'auto' }}>(≥5 estudios req.)</span>
                 )}
               </div>
 
-              {Object.entries(grouped).map(([system, bms]) => (
-              <section key={system} style={styles.card}>
-                <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
-                  {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
-                  {bms.map((b, i) => {
-                    const elemId = studyBiomarkerElementId(activeStudyId ?? studies[0].id, b.name);
-                    const isGlowing = glowId === elemId;
-                    const isAlt = b.flag !== 'Normal';
-                    return (
-                      <div
-                        key={i} id={elemId}
-                        className={isGlowing ? 'pdi-glow-active' : ''}
-                        onClick={() => { setEditBm({ bm: b, studyId: activeStudyId ?? studies[0].id }); setEditValue(b.value); setEditFlag(b.flag); }}
-                        title="Clic para editar este valor"
-                        style={{
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          padding: '12px 16px', borderRadius: '8px', cursor: 'pointer',
-                          border: `1px solid ${isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}`,
-                          background: isAlt ? 'rgba(239,68,68,0.05)' : b.is_edited ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
-                          transition: 'all 0.2s',
-                        }}
-                        onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.7)' : 'rgba(212,175,55,0.5)'}
-                        onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}
-                      >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                            <p style={{ margin: 0, fontSize: '13px', color: isAlt ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
-                            {!!b.is_edited && <span title={`Editado · Original IA: ${b.original_value ?? ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}><Edit2 size={10} color="var(--gold-primary)" /></span>}
+              {viewMode === 'original' ? (
+                <section style={styles.card}>
+                  <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
+                    📄 Biomarcadores en Orden del Estudio Original
+                  </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+                    {[...filteredBms].sort((a, b) => {
+                      const tA = a.created_at ? new Date(a.created_at).getTime() : 0;
+                      const tB = b.created_at ? new Date(b.created_at).getTime() : 0;
+                      return tA - tB;
+                    }).map((b, i) => {
+                      const elemId = studyBiomarkerElementId(activeStudyId ?? latestStudy?.id ?? '', b.name);
+                      const isGlowing = glowId === elemId;
+                      const isAlt = b.flag !== 'Normal';
+                      return (
+                        <div
+                          key={i} id={elemId}
+                           className={isGlowing ? 'pdi-glow-active' : ''}
+                          onClick={() => { setEditBm({ bm: b, studyId: activeStudyId ?? latestStudy?.id ?? '' }); setEditValue(b.value); setEditFlag(b.flag); }}
+                          title="Clic para editar este valor"
+                          style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                            padding: '12px 16px', borderRadius: '8px', cursor: 'pointer',
+                            border: `1px solid ${isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}`,
+                            background: isAlt ? 'rgba(239,68,68,0.05)' : b.is_edited ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
+                            transition: 'all 0.2s',
+                          }}
+                          onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.7)' : 'rgba(212,175,55,0.5)'}
+                          onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <p style={{ margin: 0, fontSize: '13px', color: isAlt ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
+                              {!!b.is_edited && <span title={`Editado · Original IA: ${b.original_value ?? ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}><Edit2 size={10} color="var(--gold-primary)" /></span>}
+                            </div>
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block', marginTop: '2px' }}>
+                              🏷️ {b.system}
+                            </span>
+                            {(b.reference_range || b.referenceRange) && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range ?? b.referenceRange} {b.unit}</p>}
                           </div>
-                          {(b.reference_range || b.referenceRange) && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range ?? b.referenceRange} {b.unit}</p>}
+                          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                            <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: isAlt ? '#ef4444' : b.is_edited ? 'var(--gold-primary)' : 'var(--text-primary)' }}>
+                              {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
+                            </p>
+                            {isAlt && <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>}
+                          </div>
                         </div>
-                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                          <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: isAlt ? '#ef4444' : b.is_edited ? 'var(--gold-primary)' : 'var(--text-primary)' }}>
-                            {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
-                          </p>
-                          {isAlt && <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
-          </>;
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : (
+                Object.entries(grouped).map(([system, bms]) => (
+                  <section key={system} style={styles.card}>
+                    <h3 style={{ fontSize: '13px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1.5px', marginBottom: '16px', margin: '0 0 16px 0' }}>
+                      {MASTER_INDEX.find(s => s.name === system)?.icon} {system}
+                    </h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '10px' }}>
+                      {bms.map((b, i) => {
+                        const elemId = studyBiomarkerElementId(activeStudyId ?? latestStudy?.id ?? '', b.name);
+                        const isGlowing = glowId === elemId;
+                        const isAlt = b.flag !== 'Normal';
+                        return (
+                          <div
+                            key={i} id={elemId}
+                            className={isGlowing ? 'pdi-glow-active' : ''}
+                            onClick={() => { setEditBm({ bm: b, studyId: activeStudyId ?? latestStudy?.id ?? '' }); setEditValue(b.value); setEditFlag(b.flag); }}
+                            title="Clic para editar este valor"
+                            style={{
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              padding: '12px 16px', borderRadius: '8px', cursor: 'pointer',
+                              border: `1px solid ${isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}`,
+                              background: isAlt ? 'rgba(239,68,68,0.05)' : b.is_edited ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
+                              transition: 'all 0.2s',
+                            }}
+                            onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.7)' : 'rgba(212,175,55,0.5)'}
+                            onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.borderColor = isAlt ? 'rgba(239,68,68,0.4)' : b.is_edited ? 'rgba(212,175,55,0.35)' : 'var(--border-subtle)'}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                <p style={{ margin: 0, fontSize: '13px', color: isAlt ? '#ef4444' : 'var(--text-primary)', fontWeight: 500 }}>{b.name}</p>
+                                {!!b.is_edited && <span title={`Editado · Original IA: ${b.original_value ?? ''}`} style={{ display: 'inline-flex', alignItems: 'center' }}><Edit2 size={10} color="var(--gold-primary)" /></span>}
+                              </div>
+                              {(b.reference_range || b.referenceRange) && <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>Ref: {b.reference_range ?? b.referenceRange} {b.unit}</p>}
+                            </div>
+                            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                              <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: isAlt ? '#ef4444' : b.is_edited ? 'var(--gold-primary)' : 'var(--text-primary)' }}>
+                                {b.value} <span style={{ fontSize: '11px', fontWeight: 400 }}>{b.unit}</span>
+                              </p>
+                              {isAlt && <span style={{ fontSize: '10px', background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '1px 6px', borderRadius: '4px' }}>{b.flag}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))
+              )}
+            </>;
           })()}
 
 
@@ -1408,106 +2086,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           </> /* end estudios tab */}
         </div>
 
-        {/* ── RIGHT: Árbol Sistémico — sliding drawer ── */}
-        <div style={{ position: 'relative', overflow: 'hidden', borderLeft: isTreeOpen ? '1px solid var(--border-subtle)' : 'none', transition: 'border 0.35s' }}>
-
-          {/* Toggle tab — floats on left edge of panel */}
-          <button
-            onClick={() => setIsTreeOpen(o => !o)}
-            title={isTreeOpen ? 'Cerrar árbol' : 'Abrir árbol sistémico'}
-            style={{
-              position: 'fixed',
-              right: isTreeOpen ? 406 : 0,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              zIndex: 50,
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRight: 'none',
-              borderLeft: '3px solid var(--gold-primary)',
-              borderRadius: '12px 0 0 12px',
-              padding: '20px 10px',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 10,
-              boxShadow: '-6px 0 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(212,175,55,0.1)',
-              transition: 'right 0.35s cubic-bezier(0.4,0,0.2,1)',
-              color: 'var(--gold-primary)',
-              minHeight: 100,
-            }}
-          >
-            <Activity size={18} color="var(--gold-primary)" />
-            <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', writingMode: 'vertical-rl', textOrientation: 'mixed', color: 'var(--text-secondary)' }}>
-              {isTreeOpen ? '▶ Cerrar' : '◀ Árbol'}
-            </span>
-          </button>
-
-          {/* Panel content — slides with overflow */}
-          <div style={{ width: 400, overflowY: 'auto', padding: '28px 20px 28px 16px', height: '100%', opacity: isTreeOpen ? 1 : 0, transition: 'opacity 0.2s', pointerEvents: isTreeOpen ? 'auto' : 'none' }}>
-          <section style={{ ...styles.card, position: 'sticky', top: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
-              <Activity color="var(--gold-primary)" size={22} />
-              <h2 style={styles.sectionTitle}>Árbol Sistémico PDI</h2>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {MASTER_INDEX.map((sys) => {
-                const bms = getBiomarkersForSystem(sys.name);
-                const status = getSystemStatus(sys.name);
-                const isOpen = expandedSystem === sys.id;
-                const hasAlert = status === 'alert';
-                const hasData  = status !== 'empty';
-
-                return (
-                  <div key={sys.id} style={{ borderRadius: '8px', overflow: 'hidden', border: `1px solid ${hasAlert ? 'rgba(239,68,68,0.35)' : hasData ? 'rgba(212,175,55,0.3)' : 'var(--border-subtle)'}` }}>
-                    <button
-                      onClick={() => setExpandedSystem(isOpen ? null : sys.id)}
-                      style={{
-                        width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        padding: '10px 14px', background: hasAlert ? 'rgba(239,68,68,0.06)' : hasData ? 'rgba(212,175,55,0.04)' : 'var(--bg-main)',
-                        border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)'
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span style={{ fontSize: '16px' }}>{sys.icon}</span>
-                        <span style={{ fontSize: '12px', fontWeight: 600, color: hasAlert ? '#ef4444' : hasData ? 'var(--text-primary)' : 'var(--text-muted)', textAlign: 'left' }}>{sys.name}</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {bms.length > 0 && (
-                          <span style={{ fontSize: '10px', background: hasAlert ? 'rgba(239,68,68,0.15)' : 'rgba(212,175,55,0.15)', color: hasAlert ? '#ef4444' : 'var(--gold-primary)', padding: '2px 7px', borderRadius: '10px' }}>
-                            {bms.length}
-                          </span>
-                        )}
-                        {hasData ? (isOpen ? <ChevronDown size={14} color="var(--text-muted)" /> : <ChevronRight size={14} color="var(--text-muted)" />) : null}
-                      </div>
-                    </button>
-
-                    {isOpen && bms.length > 0 && (
-                      <div style={{ padding: '4px 14px 12px', background: 'var(--bg-main)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {bms.map((b, i) => (
-                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 10px', borderRadius: '6px', background: b.flag !== 'Normal' ? 'rgba(239,68,68,0.06)' : 'var(--bg-surface)', border: `1px solid ${b.flag !== 'Normal' ? 'rgba(239,68,68,0.2)' : 'var(--border-subtle)'}` }}>
-                            <span style={{ fontSize: '11px', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-secondary)' }}>{b.name}</span>
-                            <span style={{ fontSize: '11px', fontFamily: 'monospace', color: b.flag !== 'Normal' ? '#ef4444' : 'var(--text-primary)', fontWeight: 600 }}>{b.value} {b.unit}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {isOpen && bms.length === 0 && (
-                      <div style={{ padding: '8px 14px 12px', background: 'var(--bg-main)' }}>
-                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic', margin: 0 }}>Sin datos en este estudio</p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-          </div>{/* end inner panel content */}
-        </div>{/* end drawer outer */}
-      </div>{/* end main grid */}
+      </div>{/* end main content area */}
 
       {/* Floating Chat Button */}
       <button

@@ -1,10 +1,11 @@
 'use client';
-import React, { useMemo, useState } from 'react';
-import { Printer, Download, Edit2, Check, X } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Printer, Download, Edit2, Check, X, Eye } from 'lucide-react';
 import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, tablaBiomarkerElementId } from '@/lib/biomarkers';
 import { BIOMARKER_CATALOG, CATALOG_SYSTEMS, getCatalogEntry, computeFlag, type CatalogEntry } from '@/lib/biomarker-catalog';
 import { updateBiomarker } from '@/lib/api';
+import { getOverridesForPatient, saveOverride } from '@/lib/biomarker-overrides';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface CellData {
@@ -14,6 +15,7 @@ interface CellData {
   biomarkerId?: string;
   studyId: string;
   isEdited?: boolean;
+  originalValue?: string | null;
 }
 
 interface PivotRow {
@@ -28,9 +30,11 @@ interface PivotRow {
 
 interface Props {
   studies: Study[];
+  patientId: string;
   patientBirthDate?: string;
   glowId?: string | null;
   onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
+  documents?: any[];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -67,35 +71,51 @@ function cellColor(flag: 'Normal' | 'Alto' | 'Bajo'): string {
 }
 
 // ─── Cell Editor (inline) ────────────────────────────────────────────────────
-function EditableCell({ cell, row, onSave }: {
+// ─── Cell Editor (inline) ────────────────────────────────────────────────────
+function EditableCell({ cell, row, documents, onSave }: {
   cell: CellData;
   row: PivotRow;
+  documents?: any[];
   onSave: (biomarkerId: string, studyId: string, val: string, flag: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(cell.rawValue);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    setVal(cell.rawValue);
+  }, [cell.rawValue]);
+
   const handleSave = async () => {
     if (!cell.biomarkerId) return;
     const num = parseFloat(val.replace(',', '.'));
     const newFlag = isNaN(num) ? cell.flag : computeFlag(row.name, num);
     setSaving(true);
-    await updateBiomarker(cell.biomarkerId, { value: val, flag: newFlag, originalValue: cell.rawValue });
+    const ok = await updateBiomarker(cell.biomarkerId, {
+      value: val,
+      flag: newFlag,
+      originalValue: cell.isEdited ? cell.originalValue : cell.rawValue
+    });
+    if (!ok) {
+      alert('❌ Error al guardar en la base de datos. Abre la consola (F12) para ver el error.');
+      setSaving(false);
+      return; // Don't update UI — let user see original value on next render
+    }
     onSave(cell.biomarkerId, cell.studyId, val, newFlag);
     setSaving(false);
     setEditing(false);
   };
 
   if (editing) {
+    const doc = documents?.find(d => d.study_id === cell.studyId);
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 80 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 90 }}>
         <input
           autoFocus
           value={val}
           onChange={e => setVal(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') setEditing(false); }}
-          style={{ width: 60, background: 'var(--bg-main)', border: '1px solid var(--gold-primary)', color: 'var(--text-primary)', borderRadius: 4, padding: '2px 5px', fontSize: 11, fontFamily: 'monospace', outline: 'none' }}
+          style={{ width: 55, background: 'var(--bg-main)', border: '1px solid var(--gold-primary)', color: 'var(--text-primary)', borderRadius: 4, padding: '2px 5px', fontSize: 11, fontFamily: 'monospace', outline: 'none' }}
         />
         <button onClick={handleSave} disabled={saving} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#22c55e', padding: 2, display: 'flex' }}>
           <Check size={11} />
@@ -103,6 +123,19 @@ function EditableCell({ cell, row, onSave }: {
         <button onClick={() => setEditing(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', padding: 2, display: 'flex' }}>
           <X size={11} />
         </button>
+        {doc && (
+          <a
+            href={doc.public_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Ver Documento Original"
+            style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--gold-primary)', padding: 2, transition: 'transform 0.15s' }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.15)'; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+          >
+            <Eye size={12} />
+          </a>
+        )}
       </div>
     );
   }
@@ -121,7 +154,14 @@ function EditableCell({ cell, row, onSave }: {
       <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, color: cellColor(cell.flag) }}>
         {cell.rawValue}
       </span>
-      {cell.isEdited && <span title="Editado manualmente" style={{ fontSize: 8, color: 'var(--gold-primary)' }}>✏</span>}
+      {cell.isEdited && (
+        <span
+          title={`Corregido manualmente. Valor original: ${cell.originalValue?.split('|')[0] || cell.rawValue}`}
+          style={{ fontSize: 9, color: 'var(--gold-primary)', cursor: 'help' }}
+        >
+          ✏️
+        </span>
+      )}
       {cell.biomarkerId && (
         <Edit2 size={9} color="var(--text-muted)" style={{ opacity: 0, transition: 'opacity 0.15s' }} className="cell-edit-icon" />
       )}
@@ -130,12 +170,19 @@ function EditableCell({ cell, row, onSave }: {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId, onBiomarkerUpdated }: Props) {
+export default function BiomarkerMasterTable({ studies, patientId, patientBirthDate, glowId, onBiomarkerUpdated, documents }: Props) {
   const [localStudies, setLocalStudies] = useState<Study[]>(studies);
   const [filterSystem, setFilterSystem] = useState<string | null>(null);
 
-  // Keep local state in sync when parent changes
-  useMemo(() => { setLocalStudies(studies); }, [studies]);
+  // Keep local state in sync when parent changes (use useEffect, not useMemo, for side effects)
+  useEffect(() => { setLocalStudies(studies); }, [studies]);
+
+  // If a marker is searched (glowId is provided), clear system filters so the row is rendered
+  useEffect(() => {
+    if (glowId) {
+      setFilterSystem(null);
+    }
+  }, [glowId]);
 
   // ── Build sorted study date columns ─────────────────────────────────────────
   const sortedStudies = useMemo(() =>
@@ -153,7 +200,7 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
     for (const study of sortedStudies) {
       const dateKey = getStudyDate(study);
       for (const bm of (study.biomarkers ?? [])) {
-        const canonical = normalizeBiomarkerName(bm.name);
+        const canonical = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
         const num = parseFloat(String(bm.value).replace(',', '.'));
         const rawStr = String(bm.value ?? '').trim();
         // Accept numeric values OR meaningful text values (Negativo, Positivo, 1:80, etc.)
@@ -171,7 +218,7 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
             unit: catalogEntry?.unit ?? bm.unit,
             refMin: catalogEntry?.refMin ?? null,
             refMax: catalogEntry?.refMax ?? null,
-            system: catalogEntry?.system ?? bm.system ?? 'Otros Marcadores',
+            system: catalogEntry?.system ?? (bm as any).canonical_system ?? bm.system ?? 'Otros Marcadores',
             isFromCatalog: !!catalogEntry,
             cells: {},
           };
@@ -185,7 +232,32 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
           biomarkerId: (bm as any).id,
           studyId: study.id,
           isEdited: (bm as any).is_edited,
+          originalValue: (bm as any).original_value || null,
         };
+      }
+    }
+
+    // ── Apply localStorage overrides (same source of truth as charts) ────────
+    // This ensures manually-edited values always show in the table even if the
+    // parent re-passes stale studies from Supabase.
+    const overrides = getOverridesForPatient(patientId);
+    for (const override of overrides) {
+      const row = dataMap[override.canonicalName];
+      if (!row) continue;
+      // Find the cell whose study date matches the override
+      for (const [dateKey, cell] of Object.entries(row.cells)) {
+        if (dateKey.slice(0, 10) === override.studyDate) {
+          const newFlag = computeFlag(override.canonicalName, override.numValue) as 'Normal' | 'Alto' | 'Bajo';
+          row.cells[dateKey] = {
+            ...cell,
+            value: override.numValue,
+            rawValue: override.value,
+            flag: newFlag,
+            isEdited: true,
+            originalValue: cell.originalValue ?? cell.rawValue,
+          };
+          break;
+        }
       }
     }
 
@@ -202,7 +274,7 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return { catalogRows, unknownRows };
-  }, [sortedStudies]);
+  }, [sortedStudies, patientId]);
 
   const allRows = [...catalogRows, ...unknownRows];
 
@@ -225,11 +297,49 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
   const alteredCells = allRows.flatMap(r => Object.values(r.cells)).filter(c => c.flag !== 'Normal').length;
 
   const handleCellSave = (biomarkerId: string, studyId: string, val: string, flag: string) => {
+    // ── Persist to localStorage (same as charts) so the value survives re-renders ──
+    // Find the canonical name and study date so we can build the override record
+    let canonicalName = '';
+    let studyDate = '';
+    for (const study of localStudies) {
+      if (study.id !== studyId) continue;
+      studyDate = getStudyDate(study).slice(0, 10);
+      for (const bm of (study.biomarkers ?? [])) {
+        if ((bm as any).id === biomarkerId) {
+          canonicalName = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
+          break;
+        }
+      }
+      break;
+    }
+    if (canonicalName && studyDate) {
+      saveOverride({
+        patientId,
+        studyId,
+        biomarkerId,
+        canonicalName,
+        studyDate,
+        value: val,
+        numValue: parseFloat(val.replace(',', '.')) || 0,
+        flag,
+      });
+    }
+
+    // ── Also patch local studies state so UI re-renders immediately ──────────
     setLocalStudies(prev => prev.map(s => s.id !== studyId ? s : {
       ...s,
-      biomarkers: (s.biomarkers ?? []).map((b: any) =>
-        b.id !== biomarkerId ? b : { ...b, value: val, flag, is_edited: true, original_value: b.original_value ?? b.value }
-      ),
+      biomarkers: (s.biomarkers ?? []).map((b: any) => {
+        if (b.id !== biomarkerId) return b;
+        const cleanOrig = b.original_value ? String(b.original_value).split('|')[0] : b.value;
+        const timestamp = new Date().toISOString();
+        return {
+          ...b,
+          value: val,
+          flag,
+          is_edited: true,
+          original_value: `${cleanOrig}|${timestamp}`
+        };
+      }),
     }));
     onBiomarkerUpdated?.(studyId, biomarkerId, val, flag);
   };
@@ -302,7 +412,7 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
       </div>
 
       {/* ── The Table ── */}
-      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)', borderRadius: 12, border: '1px solid var(--border-subtle)' }} className="pdi-master-table-scroll">
+      <div id="pdi-master-table-scroll" style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 260px)', borderRadius: 12, border: '1px solid var(--border-subtle)' }} className="pdi-master-table-scroll">
         <style>{`
           @media print {
             .pdi-master-table-scroll { overflow: visible !important; }
@@ -312,8 +422,20 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
           }
           .pdi-master-table { border-collapse: collapse; min-width: 100%; }
           .pdi-master-table th { position: sticky; top: 0; z-index: 10; background: var(--bg-surface); box-shadow: 0 1px 0 rgba(212,175,55,0.2); }
-          @keyframes pdi-row-glow { 0%,100%{background:transparent} 20%{background:rgba(212,175,55,0.22)} 60%{background:rgba(212,175,55,0.1)} }
-          .pdi-row-glow-active { animation: pdi-row-glow 2.8s ease !important; outline: 1.5px solid rgba(212,175,55,0.6) !important; }
+          @keyframes pdi-row-glow {
+            0% { background: transparent; }
+            5% { background: rgba(250, 204, 21, 0.35); }
+            85% { background: rgba(250, 204, 21, 0.35); }
+            100% { background: transparent; }
+          }
+          .pdi-row-glow-active {
+            animation: pdi-row-glow 10s ease-in-out !important;
+            outline: 2px solid rgba(250, 204, 21, 0.8) !important;
+            outline-offset: -2px;
+          }
+          .pdi-row-glow-active td {
+            background: rgba(250, 204, 21, 0.2) !important;
+          }
           .pdi-master-table td:first-child,
           .pdi-master-table th:first-child { position: sticky; left: 0; z-index: 3; }
           .pdi-master-table td:nth-child(2),
@@ -409,7 +531,7 @@ export default function BiomarkerMasterTable({ studies, patientBirthDate, glowId
                             verticalAlign: 'middle',
                           }}>
                             {cell ? (
-                              <EditableCell cell={cell} row={row} onSave={handleCellSave} />
+                              <EditableCell cell={cell} row={row} documents={documents} onSave={handleCellSave} />
                             ) : (
                               <span style={{ color: 'var(--text-muted)', fontSize: 11, opacity: 0.3 }}>—</span>
                             )}

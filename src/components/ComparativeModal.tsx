@@ -150,12 +150,14 @@ export function FullWidthChart({ series, onClick }: { series: ChartSeries; onCli
 
 interface Props {
   series: ChartSeries[];
+  patientId: string;
   onClose: () => void;
   onAddToReport: (names: string[]) => Promise<boolean>;
   onValueUpdated?: (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => void;
+  documents?: any[];
 }
 
-export default function ComparativeModal({ series: initialSeries, onClose, onAddToReport, onValueUpdated }: Props) {
+export default function ComparativeModal({ series: initialSeries, patientId, onClose, onAddToReport, onValueUpdated, documents }: Props) {
   // Keep a mutable local copy so edits from ExpandedChartModal persist in the comparative view
   const [localSeries, setLocalSeries] = useState<ChartSeries[]>(initialSeries);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
@@ -252,6 +254,8 @@ export default function ComparativeModal({ series: initialSeries, onClose, onAdd
       {expandedSeries && (
         <ExpandedChartModal
           series={expandedSeries}
+          patientId={patientId}
+          documents={documents}
           onClose={() => setExpandedSeries(null)}
           onValueUpdated={handleValueUpdated}
         />

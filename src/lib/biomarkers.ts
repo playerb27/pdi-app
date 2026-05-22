@@ -25,44 +25,53 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/glucosa\s*(basal|en\s*ayuno|en\s*sangre|en\s*suero|s[eé]rica|capilar)?/i, 'Glucosa'],
 
   // ════════════════════════════════════════════════════════════════════════════
-  // LÍPIDOS
+  // LÍPIDOS — más específico primero
   // ════════════════════════════════════════════════════════════════════════════
-  [/colesterol\s*ldl\s*(calculado|directo|de\s*baja\s*densidad)?/i,    'Colesterol LDL'],
-  [/ldl[\s\-]?colesterol/i,                                             'Colesterol LDL'],
-  [/lipoprote[íi]nas?\s*de\s*baja\s*densidad/i,                        'Colesterol LDL'],
-  [/\bldl\b/i,                                                          'Colesterol LDL'],
-
-  [/colesterol\s*hdl\s*(de\s*alta\s*densidad)?/i,                      'Colesterol HDL'],
-  [/hdl[\s\-]?colesterol/i,                                             'Colesterol HDL'],
-  [/lipoprote[íi]nas?\s*de\s*alta\s*densidad/i,                        'Colesterol HDL'],
-  [/\bhdl\b/i,                                                          'Colesterol HDL'],
-
-  [/colesterol\s*vldl/i,                                                'Colesterol VLDL'],
-  [/colesterol\s*de\s*muy\s*baja\s*densidad/i,                         'Colesterol VLDL'],
-  [/\bvldl\b/i,                                                         'Colesterol VLDL'],
-
-  [/colesterol\s*total/i,                                               'Colesterol Total'],
-  [/colesterol\s*(en\s*sangre|en\s*suero|s[eé]rico)?$/i,               'Colesterol Total'],
-
-  [/triglic[eé]ridos?\s*(en\s*sangre|en\s*suero|s[eé]ricos?)?/i,       'Triglicéridos'],
-  [/\btg\b/i,                                                            'Triglicéridos'],
-
+  // ── Ratios / Sub-fracciones y Marcadores Especiales (específicos) ──────────
+  [/relaci[oó]n\s*ldl\s*[\/\-]\s*hdl|ldl\s*[\/\-]\s*hdl/i,              'Relación LDL/HDL'],
+  [/sd\s*ldl|ldl\s*sd|ldl\s*(?:de\s*)?peque[nñ]as?\s+(?:y\s+)?densas?/i, 'sd LDL (pequeñas densas)'],
+  [/colesterol\s*no[\s\-]?hdl|non[\s\-]?hdl/i,                        'Colesterol No-HDL'],
   [/[íi]ndice\s*(aterog[eé]nico|colesterol[\/\s]hdl|de\s*riesgo\s*cardiovascular)/i, 'Índice Aterogénico'],
   [/colesterol\s*total\s*[\/]\s*hdl/i,                                 'Índice Aterogénico'],
-
   [/lipoprote[íi]na\s*[\(]?a[\)]?\s*(?:peque[nñ]a)?|lp\s*[\(]?a[\)]?/i, 'Lipoproteína (a)'],
   [/apolipoprote[íi]na\s*a[\s\-]?1?|apo\s*a[\s\-]?1?\b/i,             'Apolipoproteína A1'],
   [/apolipoprote[íi]na\s*b[\s\-]?100?|apo\s*b\b/i,                    'Apolipoproteína B'],
-  [/colesterol\s*no[\s\-]?hdl|non[\s\-]?hdl/i,                        'Colesterol No-HDL'],
+  [/l[íi]pidos\s*totales/i,                                             'Lípidos Totales'],
+  [/fosfol[íi]pidos/i,                                                 'Fosfolípidos'],
+
+  // ── Colesterol VLDL (debe ir antes de LDL y Total para evitar falsos positivos) ──
+  [/colesterol\s*vldl/i,                                                'Colesterol VLDL'],
+  [/vldl[\s\-]?colesterol/i,                                            'Colesterol VLDL'],
+  [/colesterol\s*de\s*muy\s*baja\s*densidad/i,                         'Colesterol VLDL'],
+  [/\bvldl\b/i,                                                         'Colesterol VLDL'],
+
+  // ── Colesterol LDL (con límites de palabra \b para evitar subcadenas) ─────
+  [/colesterol\s*ldl\s*(calculado|directo|de\s*baja\s*densidad)?/i,    'Colesterol LDL'],
+  [/\bldl[\s\-]?colesterol/i,                                           'Colesterol LDL'],
+  [/lipoprote[íi]nas?\s*de\s*baja\s*densidad/i,                        'Colesterol LDL'],
+  [/\bldl\b/i,                                                          'Colesterol LDL'],
+
+  // ── Colesterol HDL ─────────────────────────────────────────────────────────
+  [/colesterol\s*hdl\s*(de\s*alta\s*densidad)?/i,                      'Colesterol HDL'],
+  [/\bhdl[\s\-]?colesterol/i,                                           'Colesterol HDL'],
+  [/lipoprote[íi]nas?\s*de\s*alta\s*densidad/i,                        'Colesterol HDL'],
+  [/\bhdl\b/i,                                                          'Colesterol HDL'],
+
+  // ── Colesterol Total y Triglicéridos ──────────────────────────────────────
+  [/colesterol\s*total/i,                                               'Colesterol Total'],
+  [/colesterol\s*(en\s*sangre|en\s*suero|s[eé]rico)?$/i,               'Colesterol Total'],
+  [/triglic[eé]ridos?\s*(en\s*sangre|en\s*suero|s[eé]ricos?)?/i,       'Triglicéridos'],
+  [/\btg\b/i,                                                            'Triglicéridos'],
 
   // ════════════════════════════════════════════════════════════════════════════
   // FUNCIÓN HEPÁTICA
   // ════════════════════════════════════════════════════════════════════════════
-  [/transaminasa\s*(glutámico\s*)?oxal[ao]c[eé]tica|tgo|ast\b/i,      'AST (TGO)'],
-  [/aspartato\s*(amino)?transferasa/i,                                  'AST (TGO)'],
+  [/relaci[oó]n\s*:?\s*(?:ast[\s\/\-]+alt|sgot[\s\/\-]+sgpt|ast\s*\/alt|alt\s*\/ast)/i, 'Relación AST/ALT'],
+  [/transaminasa\s*(?:glut[aá]mic[oa]\s*)?oxal[ao]c[eé]t[iy]ca|tgo|ast\b/i,      'AST (TGO)'],
+  [/aspartato\s*(?:amino)?transferasa/i,                                  'AST (TGO)'],
 
-  [/transaminasa\s*(glutámico\s*)?p[iy]r[úu]vica|tgp|alt\b/i,         'ALT (TGP)'],
-  [/alanina\s*(amino)?transferasa/i,                                    'ALT (TGP)'],
+  [/transaminasa\s*(?:glut[aá]mic[oa]\s*)?p[iy]r[úu]v[iy]ca|tgp|alt\b/i,         'ALT (TGP)'],
+  [/alanina\s*(?:amino)?transferasa/i,                                    'ALT (TGP)'],
 
   [/gamma[\s\-]?gt|ggt|gamma\s*glutamil\s*transpeptidasa/i,            'GGT'],
   [/gamma\s*glutamil\s*transfer[ae]sa/i,                               'GGT'],
@@ -77,10 +86,10 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/bilirrubina\s*no\s*conjugada/i,                                     'Bilirrubina Indirecta'],
   [/bilirrubina\s*total/i,                                              'Bilirrubina Total'],
 
+  [/relaci[oó]n\s*:?\s*(?:alb[uú]mina\s*[\s\/\-]+\s*globulina|alb\.?\s*[\s\/\-]+\s*glob\.?|a[\/\-]g)/i, 'Relación Albúmina/Globulina'],
   [/prote[íi]nas?\s*totales?\s*(en\s*sangre|en\s*suero)?/i,            'Proteínas Totales'],
   [/albúmina\s*(en\s*sangre|en\s*suero|s[eé]rica)?/i,                 'Albúmina'],
-  [/\bglobulina\b\s*(en\s*sangre|en\s*suero)?/i,                        'Globulina'],
-  [/relaci[oó]n\s*alb[uú]mina[\s\/\-]globulina/i,                      'Relación Albúmina/Globulina'],
+  [/\bglobulina\b\s*(en\s*sangre|en\s*suero)?/i,                        'Globulinas'],
 
   [/deshidrogenasa\s*l[aá]ctica|dhl|ldh\b/i,                          'LDH'],
 
@@ -88,11 +97,11 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // FUNCIÓN RENAL
   // ════════════════════════════════════════════════════════════════════════════
   // ── Ratios (MUST come before generic "Creatinina" rule to avoid false match) ──
-  [/relaci[oó]n\s*(bun|nitrógeno\s*ur[eé]ico)[\/\s\-]+creatinina/i,    'Relación BUN/Creatinina'],
-  [/relaci[oó]n\s*urea[\/\s\-]+creatinina/i,                            'Relación Urea/Creatinina'],
+  [/relaci[oó]n\s*:?\s*(bun|nitrógeno\s*ur[eé]ico)[\/\s\-]+creat(?:inina)?/i, 'Relación BUN/Creatinina'],
+  [/relaci[oó]n\s*:?\s*urea[\/\s\-]+creatinina/i,                            'Relación Urea/Creatinina'],
   [/bun[\/\s\-]+creatinina/i,                                            'Relación BUN/Creatinina'],
-  [/relaci[oó]n\s*albúmina[\s\/\-]creatinina/i,                        'Relación Albúmina/Creatinina'],
-  [/relaci[oó]n\s*creatinina[\s\/\-]albúmina/i,                        'Relación Albúmina/Creatinina'],
+  [/relaci[oó]n\s*:?\s*albúmina[\s\/\-]+creatinina/i,                        'Relación Albúmina/Creatinina'],
+  [/relaci[oó]n\s*:?\s*creatinina[\s\/\-]+albúmina/i,                        'Relación Albúmina/Creatinina'],
   // ── Individual creatinine markers ────────────────────────────────────────
   [/creatinina\s*en\s*orina|creatinuria/i,                              'Creatinina en Orina'],
   [/creatinina\s*(en\s*sangre|s[eé]rica|en\s*suero)?/i,                'Creatinina'],
@@ -100,32 +109,45 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/urea\s*(en\s*sangre|s[eé]rica)?/i,                                  'Urea'],
   [/[aá]cido\s*[uú]rico\s*(en\s*sangre|s[eé]rico)?/i,                 'Ácido Úrico'],
   [/uricemia/i,                                                           'Ácido Úrico'],
-  [/tasa\s*de\s*filtraci[oó]n\s*glomerular|tfg|gfr\b/i,               'Filtración Glomerular'],
+  [/tasa\s*de\s*filtraci[oó]n\s*(?:glomerular\s*)?estimada|tasa\s*de\s*filtraci[oó]n\s*glomerular|tfg|gfr\b/i, 'Filtración Glomerular'],
   [/microalb[uú]minuria/i,                                               'Microalbuminuria'],
   [/cistatina\s*c\b/i,                                                   'Cistatina C'],
-  [/prote[íi]nas?\s*en\s*orina|proteinuria/i,                           'Proteínas en Orina'],
-  [/glucosa\s*en\s*orina|glucosuria/i,                                   'Glucosa en Orina'],
+  [/prote[íi]nas?\s*(?:en\s*orina|\(orina\))|proteinuria/i,             'Proteínas en Orina'],
+  [/glucosa\s*(?:en\s*orina|\(orina\))|glucosuria/i,                    'Glucosa en Orina'],
   [/bicarbonato|co2\s*(total|en\s*sangre|plasm[aá]tico)?/i,            'Bicarbonato'],
 
   // ════════════════════════════════════════════════════════════════════════════
   // BIOMETRÍA HEMÁTICA (CBC) — HbA1c ya está arriba; va antes de Hemoglobina
   // ════════════════════════════════════════════════════════════════════════════
+  [/sangre\s*\(hemoglobina\)/i,                                         'Hemoglobina en Orina'],
   [/hemoglobina\b(?!\s*gl[iy])/i,                                       'Hemoglobina'],
   [/\bhgb\b|\bhb\b(?!\s*a)/i,                                           'Hemoglobina'],
 
   [/hematocrito/i,                                                       'Hematocrito'],
   [/\bhct\b|\bpvc\b/i,                                                   'Hematocrito'],
 
-  [/eritrocitos?|glóbulos?\s*rojos?|eritrocitometría/i,                 'Eritrocitos'],
-  [/\bgrbc?\b|\brbc\b/i,                                                 'Eritrocitos'],
+  // ── RDW y variables (debe ir antes de Eritrocitos (RBC)) ──
+  [/ancho\s*de\s*distrib(uci[oó]n)?\s*de\s*eritrocitos\s*\(?sd\)?/i,    'RDW-SD'],
+  [/amplitud\s*de\s*distribuci[oó]n\s*(eritrocitaria|de\s*eritrocitos)|ancho\s*de\s*distrib(uci[oó]n)?\s*de\s*eritrocitos|aderm?\b|rdw\b/i, 'RDW'],
 
-  [/volumen\s*corpuscular\s*medio|vcm\b|mcv\b/i,                        'VCM'],
+  // ── Urine/Microscopic/Other (MUST come before generic hematology rules) ──
+  [/eritrocitos\s*dism[oó]rficos/i,                                     'Eritrocitos Dismórficos'],
+  [/eritrocitos\s*(\(microsc[oó]pico\)|en\s*orina|urinarios?)/i,       'Eritrocitos en Orina'],
+  [/eritrocitos\s*\(orina\)/i,                                         'Eritrocitos en Orina'],
+  [/leucocitos\s*(\(microsc[oó]pico\)|en\s*orina|urinarios?)/i,         'Leucocitos en Orina'],
+  [/leucocitos\s*\(orina\s*microsc[oó]pico\)/i,                        'Leucocitos en Orina'],
+  [/leucocitos\s*\((?:tinci[oó]n\s*de\s*gram|urocultivo)\)/i,          'Leucocitos (Otros)'],
+
+  // ── Main Hematology Counts ──
+  [/eritrocitos?|glóbulos?\s*rojos?|eritrocitometría/i,                 'Eritrocitos (RBC)'],
+  [/\bgrbc?\b|\brbc\b/i,                                                 'Eritrocitos (RBC)'],
+
+  [/volumen\s*corp\.?(?:uscular)?\s*medio|volumen\s*globular\s*medio|vcm\b|mcv\b/i, 'VCM'],
   [/hemoglobina\s*corpuscular\s*media\b|hcm\b|mch\b/i,                 'HCM'],
   [/concentraci[oó]n\s*de\s*hemoglobina\s*corpuscular\s*media|chcm\b|mchc\b/i, 'CHCM'],
-  [/amplitud\s*de\s*distribuci[oó]n\s*(eritrocitaria|de\s*eritrocitos)|aderm?\b|rdw\b/i, 'RDW'],
 
-  [/leucocitos?|glóbulos?\s*blancos?|c[eé]lulas?\s*blancas?/i,         'Leucocitos'],
-  [/\bwbc\b|\bgb\b(?!\d)/i,                                              'Leucocitos'],
+  [/leucocitos?|glóbulos?\s*blancos?|c[eé]lulas?\s*blancas?/i,         'Leucocitos (WBC)'],
+  [/\bwbc\b|\bgb\b(?!\d)/i,                                              'Leucocitos (WBC)'],
 
   [/neutr[oó]filos?\s*(absolutos?|relativos?|en\s*sangre)?|segmentados?/i, 'Neutrófilos'],
   [/linfocitos?\s*(absolutos?|relativos?)?/i,                           'Linfocitos'],
@@ -134,9 +156,9 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/bas[oó]filos?\s*(absolutos?|relativos?)?/i,                        'Basófilos'],
   [/bandas?\s*(absolutos?|relativos?)?/i,                               'Bandas'],
 
+  [/volumen\s*plaquetario\s*medio|vpm\b|mpv\b/i,                       'Volumen Plaquetario Medio'],
   [/plaquetas?|trombocitos?/i,                                          'Plaquetas'],
   [/\bplt\b/i,                                                           'Plaquetas'],
-  [/volumen\s*plaquetario\s*medio|vpm\b|mpv\b/i,                       'Volumen Plaquetario Medio'],
   [/amplitud\s*de\s*distribuci[oó]n\s*(plaquetaria|de\s*plaquetas)|adp\b|pdw\b/i, 'PDW'],
 
   [/reticulocitos?\s*(absolutos?|relativos?|en\s*sangre)?/i,           'Reticulocitos'],
@@ -147,28 +169,29 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // ── Urine electrolytes — MUST come BEFORE serum rules ──────────────────────
   // Without these, "Sodio en Orina" would match the generic /sodio.../i rule
   // (optional suffix) and end up plotted on the same chart as serum Sodio.
-  [/sodio\s*en\s*orina|sodio\s*urinario/i,                             'Sodio en Orina'],
-  [/potasio\s*en\s*orina|potasio\s*urinario/i,                        'Potasio en Orina'],
-  [/cloro\s*en\s*orina|cloruro\s*en\s*orina/i,                       'Cloruro en Orina'],
-  [/calcio\s*en\s*orina|calciuria/i,                                   'Calcio en Orina'],
-  [/f[oó]sforo\s*en\s*orina|fosfaturia/i,                            'Fósforo en Orina'],
-  [/magnesio\s*en\s*orina|magnesiuria/i,                              'Magnesio en Orina'],
+  [/sodio\s*(?:en\s*orina|\(orina\)|urinario)/i,                        'Sodio en Orina'],
+  [/potasio\s*(?:en\s*orina|\(orina\)|urinario)/i,                      'Potasio en Orina'],
+  [/cloro\s*(?:en\s*orina|\(orina\)|urinario)|cloruro\s*(?:en\s*orina|\(orina\)|urinario)/i, 'Cloro en Orina'],
+  [/calcio\s*(?:en\s*orina|\(orina\)|urinaria)|calciuria/i,            'Calcio en Orina'],
+  [/f[oó]sforo\s*(?:en\s*orina|\(orina\)|urinario)|fosfaturia/i,        'Fósforo en Orina'],
+  [/magnesio\s*(?:en\s*orina|\(orina\)|urinario)|magnesiuria/i,        'Magnesio en Orina'],
   [/urea\s*en\s*orina|urea\s*urinaria/i,                              'Urea en Orina'],
 
   // ── Serum electrolytes ─────────────────────────────────────────────────────
   [/sodio\s*(en\s*sangre|s[eé]rico|plasm[aá]tico)?/i,                 'Sodio'],
-  [/\bna\+?\b/i,                                                        'Sodio'],
+  [/(?<![a-záéíóúüñ])na\+?(?![a-záéíóúüñ])/i,                           'Sodio'],
   [/potasio\s*(en\s*sangre|s[eé]rico|plasm[aá]tico)?/i,              'Potasio'],
-  [/\bk\+?\b(?!\s*a)/i,                                                 'Potasio'],
-  [/cloro|cloruro\s*(en\s*sangre|s[eé]rico)?/i,                       'Cloruro'],
-  [/\bcl\-?\b/i,                                                        'Cloruro'],
-  [/calcio\s*(total|ionizado|en\s*sangre|s[eé]rico)?/i,              'Calcio'],
-  [/\bca\+?\+?\b/i,                                                     'Calcio'],
+  [/(?<![a-záéíóúüñ])k\+?(?![a-záéíóúüñ])(?!\s*a)/i,                    'Potasio'],
+  [/cloro|cloruro\s*(en\s*sangre|s[eé]rico)?/i,                       'Cloro'],
+  [/(?<![a-záéíóúüñ])cl\-?(?![a-záéíóúüñ])/i,                           'Cloro'],
+  [/calcio\s*(?:i[oó]nico|ionizado|libre)/i,                            'Calcio Iónico'],
+  [/calcio\s*(?:total|en\s*sangre|s[eé]rico)?/i,                        'Calcio Total'],
+  [/(?<![a-záéíóúüñ])ca\+?\+?(?![a-záéíóúüñ])/i,                        'Calcio Total'],
   [/f[oó]sforo\s*(en\s*sangre|s[eé]rico)?|fosfato/i,                 'Fósforo'],
   [/magnesio\s*(en\s*sangre|s[eé]rico)?/i,                            'Magnesio'],
-  [/\bmg\b/i,                                                           'Magnesio'],
+  [/(?<![a-záéíóúüñ])mg(?![a-záéíóúüñ])/i,                             'Magnesio'],
   [/zinc\s*(en\s*sangre|s[eé]rico)?/i,                                'Zinc'],
-  [/\bzn\b/i,                                                           'Zinc'],
+  [/(?<![a-záéíóúüñ])zn(?![a-záéíóúüñ])/i,                             'Zinc'],
   [/cobre\s*(en\s*sangre|s[eé]rico)?/i,                               'Cobre'],
   [/selenio\s*(en\s*sangre|s[eé]rico)?/i,                             'Selenio'],
 
@@ -176,11 +199,11 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // HIERRO Y ANEMIA
   // ════════════════════════════════════════════════════════════════════════════
   [/capacidad\s*(total)?\s*de\s*uni[oó]n\s*(al|del)\s*hierro|tibc|uibc/i, 'TIBC'],
-  [/saturaci[oó]n\s*de\s*transferrina/i,                               'Saturación de Transferrina'],
+  [/saturaci[oó]n\s*de\s*(?:hierro|transferrina)|(?:porcentaje\s*de\s*)?saturaci[oó]n\s*de\s*hierro/i, 'Saturación de Transferrina'],
   [/transferrina\s*(en\s*sangre|s[eé]rica)?/i,                        'Transferrina'],
   [/ferritina\s*(en\s*sangre|s[eé]rica)?/i,                           'Ferritina'],
   [/hierro\s*(s[eé]rico|en\s*sangre|total)?/i,                        'Hierro'],
-  [/\bfe\b/i,                                                           'Hierro'],
+  [/(?<![a-záéíóúüñ])fe(?![a-záéíóúüñ])/i,                             'Hierro'],
 
   // ════════════════════════════════════════════════════════════════════════════
   // TIROIDES
@@ -190,13 +213,14 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/tirotropina/i,                                                      'TSH'],
   [/thyroid\s*stimulating\s*hormone/i,                                 'TSH'],
 
+  [/triyodotironina\s*reversa|t3\s*reversa|\brt3\b/i,                  'T3 Reversa'],
   [/triyodotironina\s*libre(\s*\(ft3\))?/i,                           'T3 Libre (FT3)'],
   [/t3\s*libre/i,                                                       'T3 Libre (FT3)'],
   [/\bft3\b/i,                                                          'T3 Libre (FT3)'],
 
   [/triyodotironina\s*(t3\s*total|total)?/i,                           'T3 Total'],
   [/t3\s*total/i,                                                       'T3 Total'],
-  [/\bt3\b(?!\s*(libre|l\b))/i,                                        'T3 Total'],
+  [/(?<![a-záéíóúüñ])t3(?![a-záéíóúüñ])(?!\s*(libre|l\b|reversa|r\b))/i, 'T3 Total'],
 
   [/tiroxina\s*libre(\s*\(ft4\))?/i,                                   'T4 Libre (FT4)'],
   [/t4\s*libre/i,                                                       'T4 Libre (FT4)'],
@@ -224,7 +248,8 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/renina\s*(activa|plasm[aá]tica)?/i,                                'Renina'],
   [/hormona\s*de\s*crecimiento|somatotropina|\bgh\b/i,               'Hormona del Crecimiento (GH)'],
   [/factor\s*de\s*crecimiento\s*insulínico|igf[\s\-]?1/i,            'IGF-1'],
-  [/testosterona\s*(total|libre|bio?disponible)?\s*(en\s*sangre|s[eé]rica)?/i, 'Testosterona'],
+  [/testosterona\s*libre/i,                                             'Testosterona Libre'],
+  [/testosterona\s*(?:total|biodisponible)?\s*(?:en\s*sangre|s[eé]rica)?/i, 'Testosterona Total'],
   [/estradiol|e2\b/i,                                                   'Estradiol'],
   [/estriol\b|e3\b/i,                                                   'Estriol'],
   [/progesterona\s*(en\s*sangre|s[eé]rica)?/i,                        'Progesterona'],
@@ -237,8 +262,9 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // ════════════════════════════════════════════════════════════════════════════
   // INFLAMACIÓN Y COAGULACIÓN
   // ════════════════════════════════════════════════════════════════════════════
+  [/prote[íi]na\s*["']?c["']?\s*reactiva\s*(?:de\s*)?(?:alta\s*sensibilidad|ultra\s*sensible|ultrasensible|us|hs)/i, 'PCR Ultrasensible'],
   [/pcr\s*(ultra\s*sensible|ultrasensible|us|hs|alta\s*sensibilidad)/i, 'PCR Ultrasensible'],
-  [/prote[íi]na\s*c\s*reactiva\s*(ultra\s*sensible|ultrasensible)?/i, 'PCR'],
+  [/prote[íi]na\s*["']?c["']?\s*reactiva/i,                                     'PCR'],
   [/\bpcr\b(?!\s*(ultra|us|hs))/i,                                     'PCR'],
   [/velocidad\s*de\s*sedimentaci[oó]n\s*(globular|eritrocitaria)|vsg\b|esr\b/i, 'VSG'],
   [/homociste[íi]na\s*(en\s*sangre|plasm[aá]tica)?/i,                'Homocisteína'],
@@ -259,8 +285,8 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // ════════════════════════════════════════════════════════════════════════════
   // VITAMINAS
   // ════════════════════════════════════════════════════════════════════════════
-  [/vitamina\s*d\s*[\[\(]?\s*25[\s\-]*hidro[xq]i?\s*[\]\)]?/i,       'Vitamina D 25-Hidroxi'],
-  [/25[\s\-]*(oh|hidro[xq]i)\s*(vitamina\s*d\s*3?|d\s*3?)?/i,        'Vitamina D 25-Hidroxi'],
+  [/vitamina\s*d\s*[\[\(]?\s*25[\s\-,\/]*hidro[xq]i?\s*[\]\)]?/i,       'Vitamina D 25-Hidroxi'],
+  [/25[\s\-,\/]*(oh|hidro[xq]i)\s*(vitamina\s*d\s*3?|d\s*3?)?/i,        'Vitamina D 25-Hidroxi'],
   [/calcifediol/i,                                                      'Vitamina D 25-Hidroxi'],
   [/vitamina\s*d\s*(en\s*sangre|s[eé]rica)?\s*$/i,                   'Vitamina D 25-Hidroxi'],
 

@@ -3,7 +3,7 @@ import { useState, useEffect, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, FileText, CheckCircle2, Clock, Loader2,
-  ChevronDown, ChevronUp, Printer, RotateCcw, Save
+  ChevronDown, ChevronUp, Printer, RotateCcw, Save, Trash2
 } from 'lucide-react';
 import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
@@ -16,6 +16,7 @@ import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/gene
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
+import { getOverridesForPatient } from '@/lib/biomarker-overrides';
 
 // ─── SVG → PNG conversion (browser-only) ─────────────────────────────────────
 function svgToPngBase64(svgString: string, width = 700, height = 240): Promise<string> {
@@ -82,14 +83,31 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [expandedChart6, setExpandedChart6] = useState<ChartSeries | null>(null);
   const [m6Groups, setM6Groups] = useState<ComparativeGroup[]>([]);
 
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [confirmChecked, setConfirmChecked] = useState(false);
+
+  const handleResetReport = async () => {
+    try {
+      await deleteReportModules(id);
+      await loadAll();
+      setExpanded(null);
+      setShowResetModal(false);
+      setConfirmChecked(false);
+      alert('Se ha restablecido el reporte maestro correctamente de forma definitiva.');
+    } catch (e: any) {
+      alert('Error al restablecer el reporte: ' + e.message);
+    }
+  };
+
   // Load comparative groups from localStorage when patient ID is known
   useEffect(() => {
     if (id) setM6Groups(getComparativeGroups(id));
   }, [id]);
 
-  // Build a ChartSeries from allStudies for a given canonical marker name
+  // Build a ChartSeries from allStudies for a given canonical marker name,
+  // then apply any localStorage overrides so manually-edited values always show.
   const buildSeriesForMarker = (markerName: string): ChartSeries | null => {
-    const points: ChartSeries['points'] = [];
+    const rawPoints: { date: string; value: number; flag: string; biomarkerId: string; studyId: string; isEdited?: boolean }[] = [];
     const getStudyDate = (s: any) => { const fd = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null; return s.exam_date ?? (fd ? fd + 'T12:00:00' : s.created_at); };
     const sorted = [...allStudies].sort((a, b) => new Date(getStudyDate(a)).getTime() - new Date(getStudyDate(b)).getTime());
     let unit = '', refRange = '';
@@ -97,16 +115,54 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
       for (const bm of (study.biomarkers ?? [])) {
         const num = parseFloat(bm.value); if (isNaN(num)) continue;
         if (normalizeBiomarkerName(bm.name) !== markerName) continue;
-        unit = bm.unit ?? '';
-        refRange = (bm as any).referenceRange ?? (bm as any).reference_range ?? '';
-        points.push({ date: getStudyDate(study), value: num, flag: bm.flag, biomarkerId: bm.id, studyId: study.id });
+        if (!unit) unit = bm.unit ?? '';
+        if (!refRange) refRange = (bm as any).referenceRange ?? (bm as any).reference_range ?? '';
+        rawPoints.push({ date: getStudyDate(study), value: num, flag: bm.flag, biomarkerId: bm.id, studyId: study.id, isEdited: (bm as any).is_edited ?? false });
       }
     }
-    if (!points.length) return null;
-    return { name: markerName, unit, referenceRange: refRange, points };
+    if (!rawPoints.length) return null;
+
+    // ── Apply localStorage overrides (same source of truth as charts and table) ──
+    const overrides = getOverridesForPatient(id);
+    const withOverrides = rawPoints.map(pt => {
+      const ptDate = pt.date ? pt.date.slice(0, 10) : '';
+      const override = overrides.find(o => o.canonicalName === markerName && o.studyDate === ptDate);
+      if (!override) return pt;
+      return { ...pt, value: override.numValue ?? parseFloat(override.value), flag: override.flag as any, isEdited: true };
+    });
+
+    // ── Median-dedup per day (same logic as comparativeSeries) ────────────────
+    // Prevents duplicate entries (e.g. Monocitos % and Monocitos /uL) from the
+    // same study polluting the chart. Edited/overridden values always win.
+    const allVals = withOverrides.map(p => p.value).sort((a, b) => a - b);
+    const median = allVals[Math.floor(allVals.length / 2)];
+    const byDay = new Map<string, typeof withOverrides[0]>();
+    for (const pt of withOverrides) {
+      const key = pt.date.slice(0, 10);
+      const existing = byDay.get(key);
+      if (!existing) { byDay.set(key, pt); }
+      else if (pt.isEdited && !existing.isEdited) { byDay.set(key, pt); }
+      else if (!pt.isEdited && existing.isEdited) { /* keep existing */ }
+      else if (Math.abs(pt.value - median) < Math.abs(existing.value - median)) { byDay.set(key, pt); }
+    }
+    const patched = [...byDay.values()].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    return { name: markerName, unit, referenceRange: refRange, points: patched };
   };
 
   useEffect(() => { loadAll(); }, [id]);
+
+  const autoBuildCanonical = async () => {
+    try {
+      await fetch('/api/build-canonical', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId: id }),
+      });
+    } catch (err) {
+      console.error('Error auto-building canonical:', err);
+    }
+  };
 
   const loadAll = async () => {
     const [pat, studies, interview, savedModules] = await Promise.all([
@@ -118,8 +174,16 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (pat) setPatient(pat);
     // Keep all studies for longitudinal analysis
     setAllStudies(studies);
-    // Latest study for quick access
-    if (studies.length > 0) setBiomarkers((studies[0] as any).biomarkers ?? []);
+    // Latest study for quick access (chronological sorting fallback)
+    if (studies.length > 0) {
+      const getStudyDate = (s: any) => {
+        const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+        const raw = (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
+        return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw + 'T12:00:00' : raw;
+      };
+      const sortedStudies = [...studies].sort((a, b) => new Date(getStudyDate(b)).getTime() - new Date(getStudyDate(a)).getTime());
+      setBiomarkers((sortedStudies[0] as any).biomarkers ?? []);
+    }
     setInterviewAnswers(interview);
     const moduleMap: Record<number, ReportModule> = {};
     savedModules.forEach(m => { moduleMap[m.module_num] = m; });
@@ -303,6 +367,26 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
               })}
             </div>
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{approvedCount}/5 aprobados</span>
+            <button
+              onClick={() => setShowResetModal(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 20px',
+                borderRadius: '8px',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                background: 'transparent',
+                color: '#ef4444',
+                cursor: 'pointer',
+                fontFamily: 'var(--font-main)',
+                fontSize: '13px',
+                fontWeight: 700,
+                transition: 'all 0.2s'
+              }}
+            >
+              <Trash2 size={16} /> Restablecer Reporte
+            </button>
             <button
               onClick={printReport}
               disabled={!allApproved}
@@ -542,8 +626,9 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
       {expandedChart6 && (
         <ExpandedChartModal
           series={expandedChart6}
+          patientId={id}
           onClose={() => setExpandedChart6(null)}
-          onValueUpdated={(biomarkerId, newValue, newFlag, studyId) => {
+          onValueUpdated={async (biomarkerId, newValue, newFlag, studyId) => {
             // Sync allStudies state so all chart re-renders reflect the edit
             setAllStudies(prev => prev.map(s => s.id !== studyId ? s : {
               ...s,
@@ -551,17 +636,70 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                 (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
               ),
             }));
+            // Sync biomarkers state (active study biomarkers) so the report generation gets updated data
+            setBiomarkers(prev => prev.map(b =>
+              (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
+            ));
             // Also update the expanded series itself so chart re-draws immediately
             setExpandedChart6(prev => prev ? {
               ...prev,
               points: prev.points.map(p =>
                 p.biomarkerId === biomarkerId && p.studyId === studyId
-                  ? { ...p, value: parseFloat(newValue) || p.value, flag: newFlag }
+                  ? { ...p, value: parseFloat(newValue) || p.value, flag: newFlag, isEdited: true }
                   : p
               ),
             } : null);
+            // Rebuild canonical table in DB
+            await autoBuildCanonical();
           }}
         />
+      )}
+      {showResetModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)' }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '20px', padding: '32px', width: '480px', maxWidth: '90vw', boxShadow: '0 24px 60px rgba(0,0,0,0.5)', fontFamily: 'var(--font-main)' }}>
+            <h3 style={{ margin: '0 0 12px', fontSize: '20px', fontWeight: 800, color: '#ef4444', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              ⚠️ Restablecer Reporte Maestro
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: '14px', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+              Esta acción eliminará de forma permanente todos los módulos aprobados y en borrador del Reporte Maestro de este paciente. <strong>La entrevista clínica no se verá afectada.</strong> Esta acción no se puede deshacer.
+            </p>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', background: 'rgba(255,255,255,0.03)', padding: '12px', borderRadius: '8px', cursor: 'pointer', marginBottom: '24px', fontSize: '13px', color: 'var(--text-primary)' }}>
+              <input
+                type="checkbox"
+                checked={confirmChecked}
+                onChange={e => setConfirmChecked(e.target.checked)}
+                style={{ marginTop: '3px', cursor: 'pointer' }}
+              />
+              <span>Confirmo que deseo borrar toda la información actual del Reporte Maestro y comenzar de cero.</span>
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '12px' }}>
+              <button
+                onClick={handleResetReport}
+                disabled={!confirmChecked}
+                style={{
+                  padding: '10px 24px',
+                  borderRadius: '8px',
+                  border: 'none',
+                  background: confirmChecked ? '#ef4444' : 'var(--border-subtle)',
+                  color: confirmChecked ? '#fff' : 'var(--text-muted)',
+                  cursor: confirmChecked ? 'pointer' : 'not-allowed',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  fontFamily: 'var(--font-main)',
+                  transition: 'background 0.2s'
+                }}
+              >
+                Restablecer Definitivamente
+              </button>
+              <button
+                onClick={() => { setShowResetModal(false); setConfirmChecked(false); }}
+                style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '13px', fontWeight: 600, fontFamily: 'var(--font-main)' }}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

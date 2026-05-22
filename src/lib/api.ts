@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { HIDDEN_QUESTION_IDS } from './questionnaire-data-ext';
 
 export interface Patient {
   id: string;
@@ -91,6 +92,7 @@ export interface Biomarker {
   is_edited?: boolean;
   original_value?: string;
   excluded_from_chart?: boolean; // convenience derived from flag === 'Excluido'
+  created_at?: string;
 }
 
 export async function createStudy(patientId: string, fileName: string, summary: string, examDate?: string): Promise<Study | null> {
@@ -104,18 +106,48 @@ export async function createStudy(patientId: string, fileName: string, summary: 
 }
 
 export async function createBiomarkers(studyId: string, biomarkers: Biomarker[]): Promise<boolean> {
-  const rows = biomarkers.map(b => ({
+  const baseTime = new Date();
+  const rows = biomarkers.map((b, index) => ({
     study_id: studyId,
     name: b.name,
+    raw_name: b.name,          // preserve exact name from document, never overwritten
     value: b.value,
     unit: b.unit,
     reference_range: b.reference_range ?? (b as any).referenceRange ?? null,
     flag: b.flag,
-    system: b.system,
+    system: b.system ?? 'Sin clasificar',
+    created_at: new Date(baseTime.getTime() + index).toISOString(), // sequence order via incrementing milliseconds
+    // canonical_name and canonical_system are set later by /api/build-canonical
   }));
   const { error } = await supabase.from('biomarkers').insert(rows);
   if (error) { console.error("Error inserting biomarkers:", error.message); return false; }
   return true;
+}
+
+// ─── Canonical build status ───────────────────────────────────────────────────
+
+export async function getCanonicalBuildStatus(
+  patientId: string,
+  currentStudyIds: string[]
+): Promise<{ status: 'none' | 'stale' | 'upToDate'; lastBuiltAt: Date | null; studyIdsInBuild: string[] }> {
+  const { data } = await supabase
+    .from('canonical_builds')
+    .select('built_at, study_ids')
+    .eq('patient_id', patientId)
+    .order('built_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!data) return { status: 'none', lastBuiltAt: null, studyIdsInBuild: [] };
+
+  const builtIds: string[] = data.study_ids ?? [];
+  const isStale = currentStudyIds.some(id => !builtIds.includes(id));
+
+  return {
+    status: isStale ? 'stale' : 'upToDate',
+    lastBuiltAt: new Date(data.built_at),
+    studyIdsInBuild: builtIds,
+  };
 }
 
 export async function getStudiesWithBiomarkers(patientId: string): Promise<Study[]> {
@@ -139,16 +171,34 @@ export async function deleteStudy(studyId: string): Promise<boolean> {
 
 export async function updateBiomarker(
   biomarkerId: string,
-  updates: { value: string; flag: string; originalValue?: string }
+  updates: { value: string; flag: string; originalValue?: string | null }
 ): Promise<boolean> {
-  const payload: Record<string, string | boolean> = {
+  const payload: Record<string, any> = {
     value: updates.value,
     flag: updates.flag,
     is_edited: true,
   };
-  if (updates.originalValue !== undefined) payload.original_value = updates.originalValue;
-  const { error } = await supabase.from('biomarkers').update(payload).eq('id', biomarkerId);
-  if (error) { console.error('Error updating biomarker:', error.message); return false; }
+  if (updates.originalValue !== undefined && updates.originalValue !== null) {
+    const cleanOrig = String(updates.originalValue).split('|')[0];
+    const timestamp = new Date().toISOString();
+    payload.original_value = `${cleanOrig}|${timestamp}`;
+  }
+
+  // Use .select() without .single() — .single() throws PGRST116 if RLS
+  // doesn't return rows even when the UPDATE itself succeeded.
+  const { data: rows, error } = await supabase
+    .from('biomarkers')
+    .update(payload)
+    .eq('id', biomarkerId)
+    .select('id, value, is_edited');
+
+  if (error) {
+    console.error('[updateBiomarker] FAILED:', error.message, 'code:', error.code);
+    return false;
+  }
+
+  // rows can be [] if RLS blocks SELECT after UPDATE — the update still happened.
+  // We trust that if there's no error, the update succeeded.
   return true;
 }
 
@@ -180,6 +230,10 @@ export async function getInterviewAnswers(
     .eq('patient_id', patientId);
   if (!data) return {};
   return Object.fromEntries(data.map(r => [r.question_id, r.answer]));
+}
+
+export async function deleteInterviewAnswers(patientId: string): Promise<void> {
+  await supabase.from('interviews').delete().eq('patient_id', patientId);
 }
 
 // ─── Report Modules ────────────────────────────────────────────────────────────
@@ -227,13 +281,21 @@ export async function getPatientProgressBatch(
 ): Promise<Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }>> {
   if (patientIds.length === 0) return {};
   const [{ data: interviews }, { data: reports }, { data: studies }] = await Promise.all([
-    supabase.from('interviews').select('patient_id').in('patient_id', patientIds),
+    supabase.from('interviews').select('patient_id, question_id, answer').in('patient_id', patientIds),
     supabase.from('report_modules').select('patient_id, status').in('patient_id', patientIds),
     supabase.from('studies').select('patient_id').in('patient_id', patientIds),
   ]);
   const result: Record<string, { interviewCount: number; reportApproved: number; reportGenerated: number; studyCount: number }> = {};
   patientIds.forEach(id => { result[id] = { interviewCount: 0, reportApproved: 0, reportGenerated: 0, studyCount: 0 }; });
-  (interviews || []).forEach((r: any) => { if (result[r.patient_id]) result[r.patient_id].interviewCount++; });
+  
+  (interviews || []).forEach((r: any) => {
+    if (result[r.patient_id]) {
+      if (r.question_id && !HIDDEN_QUESTION_IDS.includes(r.question_id) && r.answer !== '') {
+        result[r.patient_id].interviewCount++;
+      }
+    }
+  });
+
   (reports || []).forEach((r: any) => {
     if (result[r.patient_id]) {
       result[r.patient_id].reportGenerated++;

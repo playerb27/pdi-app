@@ -88,11 +88,34 @@ function buildPrompt(
       }).join('\n')
     : '';
 
-  // Clean interview text — remove sXqY IDs and notes keys, show only answer content
-  const interviewText = Object.entries(interviewAnswers)
-    .filter(([k, v]) => !k.startsWith('notes_s') && v && v.trim())
+  // Clean interview text — remove sXqY IDs, notes keys, and differential questions/answers
+  const baseInterviewEntries = Object.entries(interviewAnswers)
+    .filter(([k, v]) => !k.startsWith('notes_s') && k !== 'differential_questions' && !k.startsWith('diff_q_') && !k.startsWith('diff_a_') && v && v.trim());
+
+  const interviewText = baseInterviewEntries
     .map(([, v]) => '• ' + v.replace(/\|\|/g, ', '))
     .join('\n');
+
+  // Format differential questions and answers if present
+  let differentialText = '';
+  const diffQuestionsRaw = interviewAnswers['differential_questions'];
+  if (diffQuestionsRaw) {
+    try {
+      const questionsList = JSON.parse(diffQuestionsRaw);
+      if (Array.isArray(questionsList) && questionsList.length > 0) {
+        const lines = questionsList.map((q: any) => {
+          const answer = interviewAnswers[q.id.replace('diff_q_', 'diff_a_')] || interviewAnswers[q.id] || '';
+          if (!answer.trim()) return '';
+          return `• Pregunta de Diagnóstico Diferencial: ${q.question}\n  Justificación clínica: ${q.justification}\n  Respuesta: ${answer.trim()}`;
+        }).filter(Boolean);
+        if (lines.length > 0) {
+          differentialText = `\nPREGUNTAS ADICIONALES DE DIAGNÓSTICO DIFERENCIAL:\n${lines.join('\n')}`;
+        }
+      }
+    } catch (e) {
+      console.error('Error parsing differential questions in report generator:', e);
+    }
+  }
 
   const base = `Paciente: ${patient.full_name} | ${age} | ${patient.gender === 'male' ? 'Masculino' : 'Femenino'} | ${patient.status}`;
 
@@ -144,6 +167,7 @@ ${base}
 
 DATOS DE LA ENTREVISTA CLÍNICA (respuestas del paciente):
 ${interviewText}
+${differentialText}
 ${doctorNotesText ? `
 OBSERVACIONES CLÍNICAS DEL MÉDICO (notas del exploración física y evaluación clínica directa):
 ${doctorNotesText}` : ''}
@@ -220,6 +244,7 @@ ${historialText}
 
 RESPUESTAS DE ENTREVISTA CLÍNICA (voz del paciente):
 ${interviewText}
+${differentialText}
 ${doctorNotesText ? `
 OBSERVACIONES CLÍNICAS DEL MÉDICO (hallazgos directos, alta prioridad diagnóstica):
 ${doctorNotesText}
