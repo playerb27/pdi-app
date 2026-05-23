@@ -213,23 +213,19 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     setIsSavingBm(true);
     const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag });
     if (ok) {
-      // Compute original_value: keep existing if already edited, or use current value for first edit
-      const newOriginalValue = editBm.bm.is_edited
-        ? (editBm.bm.original_value ?? editBm.bm.value)  // already edited: preserve the original
-        : editBm.bm.value;                                // first edit: current value becomes original
-
-      // Update local state only after confirmed DB write
+      // Update local state only after confirmed DB write.
+      // original_value is wiped — the corrected value is the only clinical truth.
       setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
         ...s,
         biomarkers: (s.biomarkers as Biomarker[]).map(b =>
-          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: newOriginalValue }
+          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
         )
       }));
       if (analysisResult) {
         setAnalysisResult(prev => prev ? {
           ...prev,
           biomarkers: prev.biomarkers.map(b =>
-            b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: newOriginalValue }
+            b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
           )
         } : prev);
       }
@@ -946,10 +942,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               })()}
 
               {editBm.bm.is_edited && (
-                <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', marginBottom: '16px' }}>
-                  <p style={{ margin: 0, fontSize: '11px', color: 'var(--gold-primary)' }}>
-                    ✏️ Valor original de la IA: <strong>{editBm.bm.original_value ?? '—'}</strong>
-                  </p>
+                <div style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(212,175,55,0.06)', border: '1px solid rgba(212,175,55,0.2)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '13px' }}>✏️</span>
+                  <span style={{ fontSize: '11px', color: 'var(--gold-primary)' }}>Valor editado manualmente — el original de la IA fue eliminado</span>
                 </div>
               )}
               <div style={styles.formGroup}>

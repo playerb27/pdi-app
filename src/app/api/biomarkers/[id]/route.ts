@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /api/biomarkers/[id]
-// Body: { value: string; flag: string; originalValue?: string | null }
+// Body: { value: string; flag: string }
 //
 // Uses service_role key (server-side only) so updates bypass RLS policies.
 // This is the correct approach — client-side anon key updates are silently
@@ -36,25 +36,14 @@ export async function PATCH(
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // ── Fetch current row so we can preserve original_value on first edit ──
-    // Rule: original_value is set ONCE (the AI's value before any human edit).
-    // If already edited, keep the existing original_value unchanged.
-    const { data: current } = await sb
-      .from('biomarkers')
-      .select('value, is_edited, original_value')
-      .eq('id', biomarkerId)
-      .single();
-
-    const isFirstEdit = !current?.is_edited;
-    const preservedOriginal = isFirstEdit
-      ? (current?.value ?? null)   // save what the AI had before the first edit
-      : (current?.original_value ?? null); // already edited: keep original untouched
-
+    // MEDICAL SAFETY: original_value is always wiped to null on every edit.
+    // The manually-corrected value IS the clinical truth — no old AI value should
+    // persist anywhere in the database after a human correction.
     const payload: Record<string, any> = {
       value: String(value),
       flag: String(flag),
       is_edited: true,
-      original_value: preservedOriginal,
+      original_value: null,
     };
 
     const { data: updated, error } = await sb
