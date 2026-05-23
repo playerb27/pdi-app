@@ -663,7 +663,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       setActiveTab(targetTab);
       if (targetTab === 'tabla') setIsTreeOpen(false);
       else setIsTreeOpen(true);
-      setTimeout(() => tryScroll(8), 300); // Give 8 retries (almost 1 sec) for rendering tab switch
+      setTimeout(() => tryScroll(15), 400); // Give 15 retries (~1.8s) for rendering tab switch
       return;
     }
     // If the result belongs to a specific study, activate it first, then scroll after render
@@ -675,7 +675,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       }
       setTimeout(() => tryScroll(8), 300);
     } else {
-      setTimeout(() => tryScroll(5), 80);
+      setTimeout(() => tryScroll(8), 80);
     }
   };
 
@@ -1254,10 +1254,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       `}</style>
 
       {/* ── Main content area ── */}
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div id="pdi-left-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
 
         {/* ── Content ── */}
-        <div id="pdi-left-scroll" style={{ padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div style={{ padding: '28px 24px 28px 48px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
           {/* ── Tab bar ── */}
           <div style={{ display: 'flex', gap: 4, padding: '4px', borderRadius: 12, background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', width: 'fit-content' }}>
