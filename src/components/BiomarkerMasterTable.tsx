@@ -174,14 +174,32 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
   const [localStudies, setLocalStudies] = useState<Study[]>(studies);
   const [filterSystem, setFilterSystem] = useState<string | null>(null);
 
-  // Keep local state in sync when parent changes (use useEffect, not useMemo, for side effects)
-  useEffect(() => { setLocalStudies(studies); }, [studies]);
-
-  // If a marker is searched (glowId is provided), clear system filters so the row is rendered
+  // Keep local state in sync when parent changes.
+  // IMPORTANT: Skip sync while glowId is active — re-rendering the table
+  // destroys the CSS animation on the highlighted row.
   useEffect(() => {
-    if (glowId) {
-      setFilterSystem(null);
+    if (!glowId) {
+      setLocalStudies(studies);
     }
+  }, [studies, glowId]);
+
+  // If a marker is searched (glowId is provided):
+  // 1. Clear system filters so the row is rendered
+  // 2. Scroll the row into view inside the table's own scroll container
+  useEffect(() => {
+    if (!glowId) return;
+    setFilterSystem(null);
+    // Wait one frame for the row to render with the correct filter, then scroll
+    requestAnimationFrame(() => {
+      const el = document.getElementById(glowId);
+      const panel = document.getElementById('pdi-master-table-scroll');
+      if (el && panel) {
+        const elRect = el.getBoundingClientRect();
+        const panelRect = panel.getBoundingClientRect();
+        const scrollTarget = elRect.top - panelRect.top + panel.scrollTop - panel.clientHeight / 2 + el.clientHeight / 2;
+        panel.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
+      }
+    });
   }, [glowId]);
 
   // ── Build sorted study date columns ─────────────────────────────────────────
