@@ -208,6 +208,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [editFlag, setEditFlag] = useState('');
   const [isSavingBm, setIsSavingBm] = useState(false);
 
+  // Interview link state
+  const [interviewToken, setInterviewToken] = useState<string | null>(null);
+  const [isGeneratingToken, setIsGeneratingToken] = useState(false);
+  const [showTokenCopied, setShowTokenCopied] = useState(false);
+
   const handleSaveBiomarker = async () => {
     if (!editBm?.bm.id) return;
     setIsSavingBm(true);
@@ -234,6 +239,56 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     // which would overwrite the local state we just set.
     setIsSavingBm(false);
     setEditBm(null);
+  };
+
+  const handleGenerateInterviewToken = async () => {
+    setIsGeneratingToken(true);
+    try {
+      const res = await fetch(`/api/pacientes/${id}/interview-token`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setInterviewToken(data.token);
+        // Auto-copy to clipboard
+        try {
+          await navigator.clipboard.writeText(data.url);
+          setShowTokenCopied(true);
+          setTimeout(() => setShowTokenCopied(false), 3000);
+        } catch (e) { /* clipboard may fail in some contexts */ }
+      } else {
+        showError('No se pudo generar el link de entrevista');
+      }
+    } catch (e) {
+      showError('Error de red al generar el link');
+    }
+    setIsGeneratingToken(false);
+  };
+
+  const handleRevokeInterviewToken = async () => {
+    if (!confirm('¿Eliminar el link de entrevista? El paciente ya no podrá acceder con el link anterior.')) return;
+    try {
+      const res = await fetch(`/api/pacientes/${id}/interview-token`, { method: 'DELETE' });
+      if (res.ok) {
+        setInterviewToken(null);
+      } else {
+        showError('No se pudo eliminar el link');
+      }
+    } catch (e) {
+      showError('Error de red al eliminar el link');
+    }
+  };
+
+  const handleCopyInterviewLink = async () => {
+    if (!interviewToken) return;
+    const baseUrl = window.location.origin;
+    const url = `${baseUrl}/entrevista/${interviewToken}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setShowTokenCopied(true);
+      setTimeout(() => setShowTokenCopied(false), 3000);
+    } catch (e) {
+      // Fallback: show URL in prompt
+      prompt('Copia este link:', url);
+    }
   };
 
 
@@ -383,6 +438,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     if (!data) { router.push('/'); return; }
     setPatient(data);
     setEditFormData({ full_name: data.full_name, birth_date: data.birth_date, gender: data.gender, status: data.status });
+    if (data && (data as any).interview_token) {
+      setInterviewToken((data as any).interview_token);
+    }
     setLoading(false);
   };
 
@@ -1328,6 +1386,70 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             ))}
           </div>
 
+          {/* ── Interview Link Card ── */}
+          <div style={{
+            margin: '0 0 0 0',
+            padding: '12px 16px',
+            borderRadius: '12px',
+            background: 'rgba(212,175,55,0.04)',
+            border: '1px solid rgba(212,175,55,0.15)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            flexWrap: 'wrap',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: '200px' }}>
+              <span style={{ fontSize: '16px' }}>🔗</span>
+              <div>
+                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>Link de Entrevista del Paciente</p>
+                <p style={{ margin: '2px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {interviewToken
+                    ? `${typeof window !== 'undefined' ? window.location.origin : ''}/entrevista/${interviewToken.slice(0, 8)}...`
+                    : 'Sin link activo — el paciente no puede acceder aún'}
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              {interviewToken ? (
+                <>
+                  <button
+                    onClick={handleCopyInterviewLink}
+                    style={{
+                      padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                      border: '1px solid rgba(212,175,55,0.4)', background: showTokenCopied ? 'rgba(34,197,94,0.15)' : 'rgba(212,175,55,0.1)',
+                      color: showTokenCopied ? '#22c55e' : 'var(--gold-primary)', cursor: 'pointer',
+                      fontFamily: 'var(--font-main)', transition: 'all 0.2s',
+                    }}
+                  >
+                    {showTokenCopied ? '✓ Copiado' : 'Copiar Link'}
+                  </button>
+                  <button
+                    onClick={handleRevokeInterviewToken}
+                    style={{
+                      padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
+                      border: '1px solid rgba(239,68,68,0.3)', background: 'transparent',
+                      color: '#ef4444', cursor: 'pointer', fontFamily: 'var(--font-main)', transition: 'all 0.2s',
+                    }}
+                  >
+                    Eliminar Link
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleGenerateInterviewToken}
+                  disabled={isGeneratingToken}
+                  style={{
+                    padding: '7px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    border: 'none', background: 'var(--gold-primary)',
+                    color: '#000', cursor: isGeneratingToken ? 'not-allowed' : 'pointer',
+                    fontFamily: 'var(--font-main)', opacity: isGeneratingToken ? 0.7 : 1, transition: 'all 0.2s',
+                  }}
+                >
+                  {isGeneratingToken ? 'Generando...' : '🔗 Generar y Compartir'}
+                </button>
+              )}
+            </div>
+          </div>
 
 
           {/* ── Evolución Clínica tab ── */}
