@@ -896,9 +896,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   {/* Eye button — opens the original study document */}
-                  {sourceDoc?.url && (
+                  {(sourceDoc?.public_url || sourceDoc?.url) && (
                     <a
-                      href={sourceDoc.url}
+                      href={sourceDoc.public_url ?? sourceDoc.url}
                       target="_blank"
                       rel="noopener noreferrer"
                       title="Ver estudio original de laboratorio"
