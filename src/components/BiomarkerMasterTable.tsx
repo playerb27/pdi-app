@@ -91,15 +91,15 @@ function EditableCell({ cell, row, documents, onSave }: {
     const num = parseFloat(val.replace(',', '.'));
     const newFlag = isNaN(num) ? cell.flag : computeFlag(row.name, num);
     setSaving(true);
+    // Clean replace — no originalValue tracking
     const ok = await updateBiomarker(cell.biomarkerId, {
       value: val,
       flag: newFlag,
-      originalValue: cell.isEdited ? cell.originalValue : cell.rawValue
     });
     if (!ok) {
-      alert('❌ Error al guardar en la base de datos. Abre la consola (F12) para ver el error.');
+      alert('❌ Error al guardar. Abre la consola (F12) para ver el error.');
       setSaving(false);
-      return; // Don't update UI — let user see original value on next render
+      return;
     }
     onSave(cell.biomarkerId, cell.studyId, val, newFlag);
     setSaving(false);
@@ -280,19 +280,17 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
   const alteredCells = allRows.flatMap(r => Object.values(r.cells)).filter(c => c.flag !== 'Normal').length;
 
   const handleCellSave = (biomarkerId: string, studyId: string, val: string, flag: string) => {
-    // ── Patch local studies state so UI re-renders immediately ───────────────
+    // Patch local studies state so UI re-renders immediately with new value
     setLocalStudies(prev => prev.map(s => s.id !== studyId ? s : {
       ...s,
       biomarkers: (s.biomarkers ?? []).map((b: any) => {
         if (b.id !== biomarkerId) return b;
-        const cleanOrig = b.original_value ? String(b.original_value).split('|')[0] : b.value;
-        const timestamp = new Date().toISOString();
         return {
           ...b,
           value: val,
           flag,
           is_edited: true,
-          original_value: `${cleanOrig}|${timestamp}`
+          original_value: null,  // wiped
         };
       }),
     }));

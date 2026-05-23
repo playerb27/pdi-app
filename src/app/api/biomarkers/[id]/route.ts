@@ -40,13 +40,8 @@ export async function PATCH(
       value: String(value),
       flag: String(flag),
       is_edited: true,
+      original_value: null,  // wipe — old value is gone forever
     };
-
-    if (originalValue !== undefined && originalValue !== null) {
-      const cleanOrig = String(originalValue).split('|')[0];
-      const timestamp = new Date().toISOString();
-      payload.original_value = `${cleanOrig}|${timestamp}`;
-    }
 
     const { data: updated, error } = await sb
       .from('biomarkers')

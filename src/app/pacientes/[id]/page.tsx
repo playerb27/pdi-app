@@ -181,9 +181,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       biomarkers: newFlag === 'Excluido'
         // Biomarker was deleted from Supabase — remove from local state too
         ? (s.biomarkers as any[]).filter(b => (b as any).id !== biomarkerId)
-        // Normal edit — update value and flag in place
+        // Normal edit — replace value completely, wipe original_value
         : (s.biomarkers as any[]).map(b =>
-            (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: (b as any).original_value ?? b.value }
+            (b as any).id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: undefined }
           ),
     }));
 
@@ -193,13 +193,14 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         biomarkers: newFlag === 'Excluido'
           ? prev.biomarkers.filter(b => b.id !== biomarkerId)
           : prev.biomarkers.map(b =>
-              b.id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: b.original_value ?? b.value }
+            b.id !== biomarkerId ? b : { ...b, value: newValue, flag: newFlag, is_edited: true, original_value: undefined }
             )
       } : prev);
     }
     // NOTE: Do NOT call autoBuildCanonical() here — it triggers loadStudies()
     // which would overwrite the local state we just set.
   };
+
 
   // Biomarker inline edit state
   const [editBm, setEditBm] = useState<{ bm: Biomarker; studyId: string } | null>(null);
@@ -210,31 +211,31 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const handleSaveBiomarker = async () => {
     if (!editBm?.bm.id) return;
     setIsSavingBm(true);
-    const originalValue = editBm.bm.is_edited ? editBm.bm.original_value : editBm.bm.value;
-    const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag, originalValue });
+    // Clean replace — no originalValue tracking
+    const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag });
     if (ok) {
-      // Edit saved to DB with is_edited=true — no localStorage needed.
-    }
-    // Update local state immediately — do NOT reload from DB
-    setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
-      ...s,
-      biomarkers: (s.biomarkers as Biomarker[]).map(b =>
-        b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: originalValue }
-      )
-    }));
-    if (analysisResult) {
-      setAnalysisResult(prev => prev ? {
-        ...prev,
-        biomarkers: prev.biomarkers.map(b =>
-          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: originalValue }
+      // Update local state only after confirmed DB write
+      setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
+        ...s,
+        biomarkers: (s.biomarkers as Biomarker[]).map(b =>
+          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
         )
-      } : prev);
+      }));
+      if (analysisResult) {
+        setAnalysisResult(prev => prev ? {
+          ...prev,
+          biomarkers: prev.biomarkers.map(b =>
+            b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
+          )
+        } : prev);
+      }
     }
     // NOTE: Do NOT call autoBuildCanonical() here — it triggers loadStudies()
     // which would overwrite the local state we just set.
     setIsSavingBm(false);
     setEditBm(null);
   };
+
 
   // Cargar historial de chat desde Supabase al cargar el perfil
   useEffect(() => {

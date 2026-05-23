@@ -92,7 +92,7 @@ export interface Biomarker {
   flag: string;       // 'Normal' | 'Alto' | 'Bajo' | 'Excluido'
   system: string;
   is_edited?: boolean;
-  original_value?: string;
+  original_value?: string | null;
   excluded_from_chart?: boolean; // convenience derived from flag === 'Excluido'
   created_at?: string;
 }
@@ -183,7 +183,7 @@ export async function deleteStudy(studyId: string): Promise<boolean> {
 
 export async function updateBiomarker(
   biomarkerId: string,
-  updates: { value: string; flag: string; originalValue?: string | null }
+  updates: { value: string; flag: string }
 ): Promise<boolean> {
   try {
     const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
@@ -192,7 +192,6 @@ export async function updateBiomarker(
       body: JSON.stringify({
         value: updates.value,
         flag: updates.flag,
-        originalValue: updates.originalValue,
       }),
     });
 

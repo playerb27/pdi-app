@@ -96,42 +96,40 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
     if (editIdx === null) return;
     const pt = points[editIdx];
     if (!pt.biomarkerId) {
-      setSaveStatus({ ok: false, msg: '⚠️ Este punto no tiene ID en la base de datos. No se guardará al recargar la página.' });
+      setSaveStatus({ ok: false, msg: '⚠️ Este punto no tiene ID en la base de datos.' });
       setEditIdx(null);
       return;
     }
     setSaving(true);
     setSaveStatus(null);
 
+    // Clean replace — old value is gone from Supabase completely
     const ok = await updateBiomarker(pt.biomarkerId, {
       value: editVal,
       flag: editFlag,
-      originalValue: pt.isEdited ? pt.originalValue : String(pt.value)
     });
 
     if (!ok) {
-      setSaveStatus({ ok: false, msg: '❌ Error al guardar en la base de datos. El valor NO se guardó. Por favor intenta de nuevo.' });
+      setSaveStatus({ ok: false, msg: '❌ Error al guardar. El valor NO se actualizó. Intenta de nuevo.' });
       setSaving(false);
       setEditIdx(null);
       return;
     }
 
-    // Only update local state AFTER confirmed DB save
+    // Update local state only after confirmed DB write
     const newNumVal = parseFloat(editVal);
     const safeNewVal = isNaN(newNumVal) ? pt.value : newNumVal;
-    const cleanOrig = pt.isEdited ? String(pt.originalValue).split('|')[0] : String(pt.value);
-    const timestamp = new Date().toISOString();
     const updated = points.map((p, i) => i === editIdx ? {
       ...p,
       value: safeNewVal,
       flag: editFlag,
       isEdited: true,
-      originalValue: `${cleanOrig}|${timestamp}`
+      originalValue: null,  // wiped
     } : p);
     setPoints(updated);
     onValueUpdated?.(pt.biomarkerId, editVal, editFlag, pt.studyId ?? '');
 
-    setSaveStatus({ ok: true, msg: `✅ Guardado correctamente. Valor: ${editVal}` });
+    setSaveStatus({ ok: true, msg: `✅ Guardado. Valor en base de datos: ${editVal}` });
     setSaving(false);
     setEditIdx(null);
   };
@@ -331,59 +329,45 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               </div>
             </div>
 
-            {/* Audit trail + Eye button */}
-            {editIdx !== null && (points[editIdx].isEdited || documents?.some(d => d.study_id === points[editIdx].studyId)) && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', width: '100%', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '12px' }}>
-                <div style={{ flex: 1, minWidth: '240px' }}>
-                  {points[editIdx].isEdited && points[editIdx].originalValue && (() => {
-                    const parts = points[editIdx].originalValue!.split('|');
-                    const origVal = parts[0];
-                    const dateStr = parts[1] ? new Date(parts[1]).toLocaleString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Desconocida';
-                    return (
-                      <p style={{ margin: 0, fontSize: '11px', color: '#d4af37', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span>✏️</span> <span><strong>Corregido manualmente:</strong> El valor extraído originalmente era <strong>{origVal}</strong> (modificado el {dateStr}).</span>
-                      </p>
-                    );
-                  })()}
+            {/* Document viewer button */}
+            {editIdx !== null && documents?.some(d => d.study_id === points[editIdx].studyId) && (() => {
+              const pt = points[editIdx];
+              const doc = documents?.find(d => d.study_id === pt.studyId);
+              if (!doc) return null;
+              return (
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '12px' }}>
+                  <a
+                    href={doc.public_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      background: 'rgba(212,175,55,0.12)',
+                      border: '1px solid rgba(212,175,55,0.3)',
+                      color: 'var(--gold-primary)',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      textDecoration: 'none',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.background = 'rgba(212,175,55,0.2)';
+                      e.currentTarget.style.borderColor = 'var(--gold-primary)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.background = 'rgba(212,175,55,0.12)';
+                      e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)';
+                    }}
+                  >
+                    <Eye size={14} /> Ver Documento Original
+                  </a>
                 </div>
-                {(() => {
-                  const pt = points[editIdx];
-                  const doc = documents?.find(d => d.study_id === pt.studyId);
-                  if (!doc) return null;
-                  return (
-                    <a
-                      href={doc.public_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '8px 16px',
-                        borderRadius: '8px',
-                        background: 'rgba(212,175,55,0.12)',
-                        border: '1px solid rgba(212,175,55,0.3)',
-                        color: 'var(--gold-primary)',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        textDecoration: 'none',
-                        transition: 'all 0.2s',
-                      }}
-                      onMouseEnter={e => {
-                        e.currentTarget.style.background = 'rgba(212,175,55,0.2)';
-                        e.currentTarget.style.borderColor = 'var(--gold-primary)';
-                      }}
-                      onMouseLeave={e => {
-                        e.currentTarget.style.background = 'rgba(212,175,55,0.12)';
-                        e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)';
-                      }}
-                    >
-                      <Eye size={14} /> Ver Documento Original
-                    </a>
-                  );
-                })()}
-              </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
