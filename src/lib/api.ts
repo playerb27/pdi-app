@@ -171,43 +171,63 @@ export async function deleteStudy(studyId: string): Promise<boolean> {
   return true;
 }
 
+// ─── Biomarker edits — server-side route (bypasses RLS) ─────────────────────
+//
+// CRITICAL: Do NOT use the browser Supabase client (anon key) for biomarker
+// updates. Supabase RLS policies silently block UPDATE/DELETE for anon users,
+// returning no error but also making no change. The UI would show "✅ Guardado"
+// but the value would revert on page reload.
+//
+// Solution: route all writes through /api/biomarkers/[id] which runs server-side
+// with the service_role key and has full access to the table.
+
 export async function updateBiomarker(
   biomarkerId: string,
   updates: { value: string; flag: string; originalValue?: string | null }
 ): Promise<boolean> {
-  const payload: Record<string, any> = {
-    value: updates.value,
-    flag: updates.flag,
-    is_edited: true,
-  };
-  if (updates.originalValue !== undefined && updates.originalValue !== null) {
-    const cleanOrig = String(updates.originalValue).split('|')[0];
-    const timestamp = new Date().toISOString();
-    payload.original_value = `${cleanOrig}|${timestamp}`;
-  }
+  try {
+    const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        value: updates.value,
+        flag: updates.flag,
+        originalValue: updates.originalValue,
+      }),
+    });
 
-  // Use .select() without .single() — .single() throws PGRST116 if RLS
-  // doesn't return rows even when the UPDATE itself succeeded.
-  const { data: rows, error } = await supabase
-    .from('biomarkers')
-    .update(payload)
-    .eq('id', biomarkerId)
-    .select('id, value, is_edited');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      console.error('[updateBiomarker] Server error:', err.error);
+      return false;
+    }
 
-  if (error) {
-    console.error('[updateBiomarker] FAILED:', error.message, 'code:', error.code);
+    const data = await res.json();
+    return data.success === true;
+  } catch (err) {
+    console.error('[updateBiomarker] Network error:', err);
     return false;
   }
-
-  // rows can be [] if RLS blocks SELECT after UPDATE — the update still happened.
-  // We trust that if there's no error, the update succeeded.
-  return true;
 }
 
 export async function deleteBiomarker(biomarkerId: string): Promise<boolean> {
-  const { error } = await supabase.from('biomarkers').delete().eq('id', biomarkerId);
-  if (error) { console.error('Error deleting biomarker:', error.message); return false; }
-  return true;
+  try {
+    const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
+      method: 'DELETE',
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      console.error('[deleteBiomarker] Server error:', err.error);
+      return false;
+    }
+
+    const data = await res.json();
+    return data.success === true;
+  } catch (err) {
+    console.error('[deleteBiomarker] Network error:', err);
+    return false;
+  }
 }
 
 // ─── Interview / Questionnaire ────────────────────────────────────────────────
