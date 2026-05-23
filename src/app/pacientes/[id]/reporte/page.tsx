@@ -201,11 +201,19 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           moduleNum: num,
           patient,
           biomarkers,
-          allStudies: allStudies.map(s => ({
-            date: (s as any).created_at?.slice(0, 10) ?? '',
-            name: (s as any).file_name ?? (s as any).name ?? 'Estudio',
-            biomarkers: (s as any).biomarkers ?? [],
-          })),
+          allStudies: allStudies.map(s => {
+            // Use the real clinical exam date (not the upload timestamp)
+            const fileDate = (s as any).file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+            const clinicalDate = (s as any).exam_date?.slice(0, 10)
+              ?? fileDate
+              ?? (s as any).created_at?.slice(0, 10)
+              ?? '';
+            return {
+              date: clinicalDate,
+              name: (s as any).file_name ?? (s as any).name ?? 'Estudio',
+              biomarkers: (s as any).biomarkers ?? [],
+            };
+          }),
           interviewAnswers,
           approvedModules: approvedModules(),
         }),

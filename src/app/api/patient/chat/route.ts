@@ -39,33 +39,86 @@ DATOS DEL PACIENTE:
 `;
 
     if (studies && studies.length > 0) {
-      contextStr += `ESTUDIOS Y BIOMARCADORES:\n`;
+      contextStr += `ESTUDIOS Y BIOMARCADORES (COMPLETOS):\n`;
       studies.forEach((study: any) => {
-        const dateLabel = study.exam_date ?? study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? study.created_at?.slice(0, 10);
-        contextStr += `- Estudio (${dateLabel}):\n`;
-        const altered = study.biomarkers?.filter((b: any) => b.flag !== 'Normal') || [];
+        const dateLabel = study.exam_date
+          ?? study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1]
+          ?? study.created_at?.slice(0, 10)
+          ?? 'Sin fecha';
+        contextStr += `\n── Estudio del ${dateLabel} (${study.file_name ?? 'sin nombre'}) ──\n`;
+
+        const allBiomarkers = study.biomarkers ?? [];
+        const altered = allBiomarkers.filter((b: any) => b.flag !== 'Normal');
+        const normal = allBiomarkers.filter((b: any) => b.flag === 'Normal');
+
         if (altered.length > 0) {
-          contextStr += `  Biomarcadores alterados:\n`;
+          contextStr += `  🔴 Biomarcadores ALTERADOS (${altered.length}):\n`;
           altered.forEach((b: any) => {
-            contextStr += `    * ${b.name}: ${b.value} ${b.unit} (${b.flag}) [Ref: ${b.referenceRange ?? b.reference_range ?? 'N/D'}]\n`;
+            contextStr += `    * ${b.name}: ${b.value} ${b.unit} [${b.flag}] [Ref: ${b.referenceRange ?? b.reference_range ?? 'N/D'}]\n`;
           });
         }
-        const normal = study.biomarkers?.filter((b: any) => b.flag === 'Normal') || [];
         if (normal.length > 0) {
-          contextStr += `  Biomarcadores normales:\n`;
-          normal.slice(0, 15).forEach((b: any) => {
-            contextStr += `    * ${b.name}: ${b.value} ${b.unit}\n`;
+          contextStr += `  ✅ Biomarcadores en rango normal (${normal.length}):\n`;
+          // Include ALL normal biomarkers — no truncation
+          normal.forEach((b: any) => {
+            contextStr += `    * ${b.name}: ${b.value} ${b.unit} [Ref: ${b.referenceRange ?? b.reference_range ?? 'N/D'}]\n`;
           });
+        }
+        if (allBiomarkers.length === 0) {
+          contextStr += `  (Sin biomarcadores registrados en este estudio)\n`;
         }
       });
       contextStr += '\n';
     }
 
     if (interviewAnswers && Object.keys(interviewAnswers).length > 0) {
-      contextStr += `RESPUESTAS A ENTREVISTA CLÍNICA PDI:\n`;
-      Object.entries(interviewAnswers).forEach(([q, a]) => {
-        contextStr += `- ${q}: ${a}\n`;
+      // Doctor notes (notes_sX)
+      const doctorNotes = Object.entries(interviewAnswers)
+        .filter(([k, v]) => k.startsWith('notes_s') && v && (v as string).trim());
+
+      // Differential questions (structured JSON)
+      const diffQuestionsRaw = interviewAnswers['differential_questions'];
+      let differentialSection = '';
+      if (diffQuestionsRaw) {
+        try {
+          const questionsList = JSON.parse(diffQuestionsRaw);
+          if (Array.isArray(questionsList) && questionsList.length > 0) {
+            const lines = questionsList.map((q: any) => {
+              const answer = interviewAnswers[q.id.replace('diff_q_', 'diff_a_')] || interviewAnswers[q.id] || '';
+              if (!answer.trim()) return '';
+              return `• ${q.question}\n  Respuesta: ${answer.trim()}`;
+            }).filter(Boolean);
+            if (lines.length > 0) {
+              differentialSection = `\nPREGUNTAS DE DIAGNÓSTICO DIFERENCIAL (respondidas al finalizar la entrevista):\n${lines.join('\n')}\n`;
+            }
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }
+
+      // Base interview answers (excluding notes, differential keys)
+      const baseEntries = Object.entries(interviewAnswers)
+        .filter(([k, v]) =>
+          !k.startsWith('notes_s') &&
+          k !== 'differential_questions' &&
+          !k.startsWith('diff_q_') &&
+          !k.startsWith('diff_a_') &&
+          v && (v as string).trim()
+        );
+
+      contextStr += `ENTREVISTA CLÍNICA PDI:\n`;
+      baseEntries.forEach(([, v]) => {
+        contextStr += `• ${(v as string).replace(/\|\|/g, ', ')}\n`;
       });
+
+      if (differentialSection) contextStr += differentialSection;
+
+      if (doctorNotes.length > 0) {
+        contextStr += `\nOBSERVACIONES DEL MÉDICO (exploración física y evaluación directa):\n`;
+        doctorNotes.forEach(([k, v]) => {
+          const sNum = k.replace('notes_s', '');
+          contextStr += `• [Sistema ${sNum}]: ${(v as string).trim()}\n`;
+        });
+      }
       contextStr += '\n';
     }
 

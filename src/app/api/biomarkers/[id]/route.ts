@@ -20,7 +20,7 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { value, flag, originalValue } = body;
+    const { value, flag } = body;
 
     if (value === undefined || flag === undefined) {
       return NextResponse.json({ error: 'Faltan campos: value y flag son requeridos' }, { status: 400 });
@@ -36,11 +36,25 @@ export async function PATCH(
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    // ── Fetch current row so we can preserve original_value on first edit ──
+    // Rule: original_value is set ONCE (the AI's value before any human edit).
+    // If already edited, keep the existing original_value unchanged.
+    const { data: current } = await sb
+      .from('biomarkers')
+      .select('value, is_edited, original_value')
+      .eq('id', biomarkerId)
+      .single();
+
+    const isFirstEdit = !current?.is_edited;
+    const preservedOriginal = isFirstEdit
+      ? (current?.value ?? null)   // save what the AI had before the first edit
+      : (current?.original_value ?? null); // already edited: keep original untouched
+
     const payload: Record<string, any> = {
       value: String(value),
       flag: String(flag),
       is_edited: true,
-      original_value: null,  // wipe — old value is gone forever
+      original_value: preservedOriginal,
     };
 
     const { data: updated, error } = await sb

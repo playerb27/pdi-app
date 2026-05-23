@@ -211,21 +211,25 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const handleSaveBiomarker = async () => {
     if (!editBm?.bm.id) return;
     setIsSavingBm(true);
-    // Clean replace — no originalValue tracking
     const ok = await updateBiomarker(editBm.bm.id, { value: editValue, flag: editFlag });
     if (ok) {
+      // Compute original_value: keep existing if already edited, or use current value for first edit
+      const newOriginalValue = editBm.bm.is_edited
+        ? (editBm.bm.original_value ?? editBm.bm.value)  // already edited: preserve the original
+        : editBm.bm.value;                                // first edit: current value becomes original
+
       // Update local state only after confirmed DB write
       setStudies(prev => prev.map(s => s.id !== editBm.studyId ? s : {
         ...s,
         biomarkers: (s.biomarkers as Biomarker[]).map(b =>
-          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
+          b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: newOriginalValue }
         )
       }));
       if (analysisResult) {
         setAnalysisResult(prev => prev ? {
           ...prev,
           biomarkers: prev.biomarkers.map(b =>
-            b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: undefined }
+            b.id !== editBm.bm.id ? b : { ...b, value: editValue, flag: editFlag, is_edited: true, original_value: newOriginalValue }
           )
         } : prev);
       }
@@ -876,52 +880,107 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         </div>
       )}
 
-      {/* ── Biomarker Edit Modal ── */}
-      {editBm && (
-        <div style={styles.modalOverlay} onClick={() => setEditBm(null)}>
-          <div style={{ ...styles.modalContent, maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <div>
-                <h2 style={{ ...styles.sectionTitle, fontSize: '16px' }}>Editar Biomarcador</h2>
-                <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{editBm.bm.name}</p>
+      {editBm && (() => {
+        // Find the source document linked to this study so we can show the eye button
+        const sourceDoc = documents.find(
+          (d: any) => d.study_id === editBm.studyId || (
+            (() => {
+              const study = studies.find(s => s.id === editBm.studyId);
+              return study?.file_name && d.file_name === study.file_name;
+            })()
+          )
+        );
+        return (
+          <div style={styles.modalOverlay} onClick={() => setEditBm(null)}>
+            <div style={{ ...styles.modalContent, maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <div>
+                  <h2 style={{ ...styles.sectionTitle, fontSize: '16px' }}>Editar Biomarcador</h2>
+                  <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{editBm.bm.name}</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  {/* Eye button — opens the original study document */}
+                  {sourceDoc?.url && (
+                    <a
+                      href={sourceDoc.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Ver estudio original de laboratorio"
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: '36px', height: '36px', borderRadius: '8px',
+                        border: '1px solid rgba(212,175,55,0.35)',
+                        background: 'rgba(212,175,55,0.08)',
+                        color: 'var(--gold-primary)',
+                        textDecoration: 'none',
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget as HTMLAnchorElement).style.background = 'rgba(212,175,55,0.18)'}
+                      onMouseLeave={e => (e.currentTarget as HTMLAnchorElement).style.background = 'rgba(212,175,55,0.08)'}
+                    >
+                      <Eye size={16} />
+                    </a>
+                  )}
+                  <button onClick={() => setEditBm(null)} style={styles.iconBtn}><X size={20} /></button>
+                </div>
               </div>
-              <button onClick={() => setEditBm(null)} style={styles.iconBtn}><X size={20} /></button>
-            </div>
-            {editBm.bm.is_edited && (
-              <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', marginBottom: '16px' }}>
-                <p style={{ margin: 0, fontSize: '11px', color: 'var(--gold-primary)' }}>
-                  ✏️ Valor original de la IA: <strong>{editBm.bm.original_value}</strong>
-                </p>
+
+              {/* Study date label */}
+              {(() => {
+                const study = studies.find(s => s.id === editBm.studyId);
+                const studyDateLabel = study
+                  ? (() => {
+                      const raw = (study as any).exam_date ?? study.file_name?.match(/(\.\d{4}-\d{2}-\d{2})/)?.[1] ?? study.created_at?.slice(0, 10);
+                      if (!raw) return null;
+                      return new Date(raw + (raw.length === 10 ? 'T12:00:00' : '')).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+                    })()
+                  : null;
+                if (!studyDateLabel) return null;
+                return (
+                  <div style={{ padding: '7px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border-subtle)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '14px' }}>📋</span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Estudio del <strong style={{ color: 'var(--text-secondary)' }}>{studyDateLabel}</strong></span>
+                    {study?.file_name && <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'monospace', opacity: 0.6 }}>{study.file_name}</span>}
+                  </div>
+                );
+              })()}
+
+              {editBm.bm.is_edited && (
+                <div style={{ padding: '8px 12px', borderRadius: '8px', background: 'rgba(212,175,55,0.08)', border: '1px solid rgba(212,175,55,0.25)', marginBottom: '16px' }}>
+                  <p style={{ margin: 0, fontSize: '11px', color: 'var(--gold-primary)' }}>
+                    ✏️ Valor original de la IA: <strong>{editBm.bm.original_value ?? '—'}</strong>
+                  </p>
+                </div>
+              )}
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Valor</label>
+                <input type="text" style={styles.input} value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="Ej: 5.276" autoFocus />
               </div>
-            )}
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Valor</label>
-              <input type="text" style={styles.input} value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="Ej: 5.276" autoFocus />
-            </div>
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: 36 }}>Flag</span>
-              {(['Normal', 'Alto', 'Bajo'] as const).map(f => (
-                <button key={f} onClick={() => setEditFlag(f)} style={{
-                  flex: 1, padding: '8px', borderRadius: '8px',
-                  border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--border-subtle)'}`,
-                  background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)') : 'transparent',
-                  color: editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--text-muted)',
-                  cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '12px', fontWeight: 600, transition: 'all 0.15s',
-                }}>{f}</button>
-              ))}
-            </div>
-            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 20px' }}>
-              Ref: {editBm.bm.reference_range ?? editBm.bm.referenceRange ?? 'N/D'} {editBm.bm.unit}
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button onClick={() => setEditBm(null)} style={styles.cancelBtn}>Cancelar</button>
-              <button onClick={handleSaveBiomarker} disabled={isSavingBm || !editBm.bm.id} className="btn-primary" style={{ padding: '10px 24px', opacity: isSavingBm ? 0.7 : 1 }}>
-                {isSavingBm ? 'Guardando...' : !editBm.bm.id ? 'Sin ID' : 'Guardar'}
-              </button>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: 36 }}>Flag</span>
+                {(['Normal', 'Alto', 'Bajo'] as const).map(f => (
+                  <button key={f} onClick={() => setEditFlag(f)} style={{
+                    flex: 1, padding: '8px', borderRadius: '8px',
+                    border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--border-subtle)'}`,
+                    background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)') : 'transparent',
+                    color: editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'var(--text-muted)',
+                    cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '12px', fontWeight: 600, transition: 'all 0.15s',
+                  }}>{f}</button>
+                ))}
+              </div>
+              <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 20px' }}>
+                Ref: {editBm.bm.reference_range ?? editBm.bm.referenceRange ?? 'N/D'} {editBm.bm.unit}
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button onClick={() => setEditBm(null)} style={styles.cancelBtn}>Cancelar</button>
+                <button onClick={handleSaveBiomarker} disabled={isSavingBm || !editBm.bm.id} className="btn-primary" style={{ padding: '10px 24px', opacity: isSavingBm ? 0.7 : 1 }}>
+                  {isSavingBm ? 'Guardando...' : !editBm.bm.id ? 'Sin ID' : 'Guardar'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Comparative Modal ── top-level, works from ANY tab ── */}
       {showComparativeModal && selectedForCompare.size > 0 && (
