@@ -85,8 +85,6 @@ const RESPONSE_SCHEMA = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Extraction prompt — pure transcription, no interpretation
-// ─────────────────────────────────────────────────────────────────────────────
 const EXTRACTION_PROMPT = `Eres un sistema de transcripción de resultados de laboratorio clínico.
 
 MISIÓN ÚNICA: Extraer todos los valores del documento con exactitud fotográfica.
@@ -109,6 +107,46 @@ REGLAS ABSOLUTAS
 ❌ NO interpretes — solo transcribe
 
 ════════════════════════════════════════════════════════
+REGLA DE TIPO DE MUESTRA — CRÍTICA PARA EVITAR MEZCLAS
+════════════════════════════════════════════════════════
+Los documentos de laboratorio a menudo contienen MÚLTIPLES ESTUDIOS en el mismo PDF,
+cada uno con diferente tipo de muestra (sangre, orina, LCR, etc.).
+Cuando un marcador proviene de una muestra DISTINTA A SANGRE/SUERO, debes añadir
+el sufijo del tipo de muestra al nombre del marcador para que NUNCA se confunda
+con el mismo marcador medido en sangre.
+
+REGLA: Detecta el tipo de muestra leyendo los encabezados del documento:
+  - "EXAMEN GENERAL DE ORINA", "TIPO DE MUESTRA: ORINA", "ANÁLISIS DE ORINA",
+    "URIANÁLISIS", "EGO", "UROCULTIVO" → sufijo " (Orina)"
+  - "LÍQUIDO CEFALORRAQUÍDEO", "LCR", "ANÁLISIS DE LCR" → sufijo " (LCR)"
+  - "LÍQUIDO SINOVIAL", "ANÁLISIS SINOVIAL" → sufijo " (Sinovial)"
+  - "ESPUTO", "ANÁLISIS DE ESPUTO" → sufijo " (Esputo)"
+  - "HECES", "ANÁLISIS COPROPARASITOSCÓPICO", "COPROCULTIVO" → sufijo " (Heces)"
+  - "ORINA DE 24 HORAS", "RECOLECCIÓN 24H" → sufijo " (Orina 24h)"
+
+APLICA el sufijo al campo "name" de CADA marcador dentro de esa sección.
+
+EJEMPLOS:
+  Documento tiene sección "EXAMEN GENERAL DE ORINA":
+    GLUCOSA → name: "GLUCOSA (Orina)"
+    PROTEÍNAS → name: "PROTEÍNAS (Orina)"
+    LEUCOCITOS → name: "LEUCOCITOS (Orina)"
+    ERITROCITOS → name: "ERITROCITOS (Orina)"
+    BILIRRUBINAS → name: "BILIRRUBINAS (Orina)"
+
+  Documento tiene sección "QUÍMICA SANGUÍNEA" o sin sección especial:
+    GLUCOSA → name: "GLUCOSA"   ← sin sufijo, es sangre por defecto
+
+  Documento tiene sección "LÍQUIDO CEFALORRAQUÍDEO":
+    GLUCOSA → name: "GLUCOSA (LCR)"
+    PROTEÍNAS → name: "PROTEÍNAS (LCR)"
+
+IMPORTANTE: Si el documento es enteramente de un solo tipo de muestra (ej. un PDF
+solo de "Examen General de Orina"), aplica el sufijo a TODOS los marcadores.
+Si el PDF mezcla estudios (química sanguínea + orina en el mismo documento), aplica
+el sufijo ÚNICAMENTE a los marcadores del estudio no-sanguíneo.
+
+════════════════════════════════════════════════════════
 REGLA CRÍTICA para tablas de columnas múltiples (Chopo, etc.)
 ════════════════════════════════════════════════════════
 Las columnas "Bajo(LR)", "Dentro(LR)", "Sobre(LR)" son MUTUAMENTE EXCLUYENTES.
@@ -126,6 +164,7 @@ exam_date
 ════════════════════════════════════════════════════════
 Busca la fecha de REALIZACIÓN del estudio (no la de entrega ni impresión).
 Formato: YYYY-MM-DD. Si no la encuentras con certeza, devuelve null.`;
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Extract text from PDF using pdfjs-dist (preserves table structure better)
