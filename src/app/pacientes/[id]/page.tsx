@@ -471,6 +471,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
   const loadDocuments = async () => {
     try {
+      // Auto-recover any orphaned documents (e.g. from previous merges that
+      // didn't re-link PDFs before deleting source studies). This is a no-op
+      // if there are no orphans, so it's safe to call on every load.
+      await fetch(`/api/pacientes/${id}/documents/recover`, { method: 'POST' });
+
       const res = await fetch(`/api/pacientes/${id}/documents`, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
