@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare, FolderOpen, FileText, Trash2, Eye, Search, Paperclip } from 'lucide-react';
+import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare, FolderOpen, FileText, Trash2, Eye, Search, Paperclip, RefreshCw } from 'lucide-react';
 import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, getCanonicalBuildStatus, Patient, Study } from '@/lib/api';
 import { TOTAL_QUESTIONS, ALL_SECTIONS, HIDDEN_QUESTION_IDS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
@@ -1999,6 +1999,23 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                     <UploadCloud size={14} /> Agregar estudio(s)
                   </span>
                 </label>
+                <button
+                  onClick={handleBuildCanonical}
+                  disabled={isBuildingCanonical}
+                  title="Re-procesa los nombres de biomarcadores para unificar sinónimos en la tabla maestra"
+                  style={{ fontSize: '12px', padding: '6px 14px', display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: isBuildingCanonical ? 'var(--text-muted)' : 'var(--text-secondary)', cursor: isBuildingCanonical ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-main)', transition: 'all 0.2s' }}
+                >
+                  {isBuildingCanonical ? (
+                    <><span style={{ display: 'inline-block', width: '12px', height: '12px', borderRadius: '50%', borderTop: '2px solid transparent', borderRight: '2px solid var(--text-muted)', borderBottom: '2px solid var(--text-muted)', borderLeft: '2px solid var(--text-muted)', animation: 'spin 0.8s linear infinite' }} /> Procesando…</>
+                  ) : (
+                    <><RefreshCw size={12} /> Reconstruir tabla</>
+                  )}
+                </button>
+                {canonicalMsg && (
+                  <span style={{ fontSize: '11px', color: canonicalMsg.startsWith('❌') ? '#ef4444' : '#22c55e', fontFamily: 'var(--font-main)' }}>
+                    {canonicalMsg}
+                  </span>
+                )}
               </div>
             ) : (
               <label style={{ ...styles.dropzone, opacity: isAnalyzing ? 0.7 : 1, cursor: isAnalyzing ? 'not-allowed' : 'pointer' }}>
