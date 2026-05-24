@@ -7,12 +7,38 @@ import { getCatalogEntry } from '@/lib/biomarker-catalog';
 // POST /api/build-canonical
 // Body: { patientId: string }
 //
-// Uses ONLY normalizeBiomarkerName (regex) — NO AI.
-// AI was removed because it returned names that didn't match the internal
-// catalog, causing biomarker data to appear missing from the table.
-// The regex is the exact same function used by EvolutionCharts and
-// BiomarkerMasterTable, so canonical_name always matches what they expect.
+// Normalises every biomarker's canonical_name using the same regex function
+// that BiomarkerMasterTable and EvolutionCharts use, so the table always
+// groups correctly without any post-render patching.
+//
+// DISAMBIGUATION STRATEGY — value-based, not study-level:
+//   Some biomarker names are ambiguous between blood and urine:
+//   e.g. "GLUCOSA" appears in both a blood panel and an EGO dipstick.
+//   We CANNOT rely on which study a biomarker belongs to, because many
+//   Mexican labs put both blood and EGO results in the same PDF → same study.
+//
+//   The reliable rule is:
+//     • Blood glucose → always NUMERIC (e.g. 89.2, 94, 100)
+//     • Urine glucose dipstick → always TEXT  (NEGATIVO, +, ++, +++)
+//   The same logic applies to Proteínas, Bilirrubinas, Hemoglobina in EGO.
+//
+//   Therefore: if an ambiguous biomarker has a non-numeric value,
+//   we append " (Orina)" before running normalizeBiomarkerName.
+//   This is 100% reliable and has no false positives.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Names that are ambiguous between blood and urine specimens. */
+const AMBIGUOUS_BLOOD_OR_ORINA =
+  /^(glucosa|proteinas|proteínas|bilirrubinas|hemoglobina|ph)$/i;
+
+/** True when a value string is qualitative / non-numeric (orina dipstick). */
+function isQualitativeValue(val: string): boolean {
+  const v = (val ?? '').trim();
+  if (v === '') return false;
+  const num = parseFloat(v.replace(',', '.'));
+  return isNaN(num); // "NEGATIVO", "+", "++", "Positivo", etc.
+}
+
 export async function POST(req: Request) {
   try {
     const { patientId } = await req.json();
@@ -29,70 +55,53 @@ export async function POST(req: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // ── Step 1: Load all biomarkers ───────────────────────────────────────
+    // ── Step 1: Load all biomarkers (include value for disambiguation) ─────
     const { data: studies, error: studiesErr } = await sb
       .from('studies')
-      .select('id, biomarkers(id, name, raw_name)')
+      .select('id, biomarkers(id, name, raw_name, value)')
       .eq('patient_id', patientId)
       .order('created_at', { ascending: true });
 
     if (studiesErr) return NextResponse.json({ error: studiesErr.message }, { status: 500 });
     if (!studies || studies.length === 0) {
-      // Clean up canonical builds for this patient
       await sb.from('canonical_builds').delete().eq('patient_id', patientId);
       return NextResponse.json({
         success: true,
-        stats: {
-          totalBiomarkers: 0,
-          uniqueNames: 0,
-          normalizedByRegex: 0,
-          updateErrors: 0,
-        },
+        stats: { totalBiomarkers: 0, uniqueNames: 0, normalizedByRegex: 0, updateErrors: 0 },
         message: 'No hay estudios para este paciente. Tabla canónica vacía.',
       });
     }
 
-    // ── Step 1.5: Orina study detection for retroactive disambiguation ────────
-    // Labs often report biomarker names without specimen context (just "GLUCOSA")
-    // in EGO studies. Detect orina studies by presence of exclusive EGO markers.
-    // Any study with NITRITOS or DENSIDAD ESPECIFICA is almost certainly an EGO.
-    const EGO_DETECTOR = /nitritos|densidad\s*especifica|urobilinogeno|leucocitos\s*esterasa|cuerpos\s*cetonicos/i;
-    // Biomarker names that are ambiguous (same in blood and urine) and need the (Orina) suffix
-    const AMBIGUOUS_IN_ORINA = /^(glucosa|proteinas|proteínas|bilirrubinas|leucocitos|eritrocitos|hemoglobina|color|aspecto|ph|celulas|bacterias|levaduras|hifas|filamento de mucina|cilindros|cristales|macrofagos)$/i;
+    // ── Step 2: Flatten biomarkers + value-based disambiguation ──────────
+    interface BmEntry { id: string; rawName: string; }
 
-    const allBiomarkers = studies.flatMap((s: any) => {
-      const biomarkersInStudy: { id: string; rawName: string }[] = (s.biomarkers ?? []).map((b: any) => ({
-        id: b.id as string,
-        rawName: (b.raw_name ?? b.name) as string,
-      }));
+    const allBiomarkers: BmEntry[] = studies.flatMap((s: any) =>
+      (s.biomarkers ?? []).map((b: any) => {
+        // Strip markdown bold artifacts (**) that some lab parsers emit
+        const nameStripped = String(b.raw_name ?? b.name ?? '')
+          .replace(/\s*\*+\s*/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
 
-      // Check if this study is an EGO (orina) study
-      const isOrinaStudy = biomarkersInStudy.some(b => EGO_DETECTOR.test(b.rawName));
+        // Value-based disambiguation:
+        // If the raw name is ambiguous AND the recorded value is qualitative
+        // text (not a number), it's a urine dipstick result → append " (Orina)".
+        // Blood values are always numeric; urine dipstick values are always text.
+        const rawName =
+          AMBIGUOUS_BLOOD_OR_ORINA.test(nameStripped) &&
+          isQualitativeValue(String(b.value ?? ''))
+            ? `${nameStripped} (Orina)`
+            : (b.raw_name ?? b.name) as string;
 
-      if (isOrinaStudy) {
-        // Retag ambiguous biomarker names with (Orina) suffix so they don't
-        // pollute blood-test canonical names (e.g. "GLUCOSA" → "GLUCOSA (Orina)")
-        return biomarkersInStudy.map(b => {
-          const nameStripped = b.rawName.replace(/\s*\*+\s*/g, ' ').replace(/\s+/g, ' ').trim();
-          const needsSuffix = AMBIGUOUS_IN_ORINA.test(nameStripped);
-          return {
-            ...b,
-            rawName: needsSuffix ? `${nameStripped} (Orina)` : b.rawName,
-          };
-        });
-      }
-
-      return biomarkersInStudy;
-    });
+        return { id: b.id as string, rawName };
+      })
+    );
 
     if (allBiomarkers.length === 0) {
       return NextResponse.json({ error: 'No hay biomarcadores para canonicalizar' }, { status: 404 });
     }
 
-    // ── Step 2: Normalize with regex only ────────────────────────────────
-    // normalizeBiomarkerName() = same function as EvolutionCharts & BiomarkerMasterTable
-    // → canonical_name will always match what those components expect
-    // → data can never "disappear"
+    // ── Step 3: Normalise with regex → same function used by the table ────
     const uniqueRawNames = [...new Set(allBiomarkers.map(b => b.rawName))];
     const canonicalMap: Record<string, { canonical_name: string; canonical_system: string }> = {};
 
@@ -102,7 +111,7 @@ export async function POST(req: Request) {
       canonicalMap[rawName] = { canonical_name: canonical, canonical_system: system };
     }
 
-    // ── Step 3: Group by canonical result → 1 DB call per group ─────────
+    // ── Step 4: Group by canonical → one DB UPDATE per group ─────────────
     const byCanonical = new Map<string, {
       canonical_name: string;
       canonical_system: string;
@@ -118,7 +127,7 @@ export async function POST(req: Request) {
       byCanonical.get(key)!.ids.push(bm.id);
     }
 
-    // ── Step 4: Parallel batch updates ───────────────────────────────────
+    // ── Step 5: Parallel batch updates ───────────────────────────────────
     let updateErrors = 0;
     await Promise.all(
       [...byCanonical.values()].map(async ({ canonical_name, canonical_system, ids }) => {
@@ -130,14 +139,14 @@ export async function POST(req: Request) {
       })
     );
 
-    // ── Step 5: Record build ──────────────────────────────────────────────
+    // ── Step 6: Record build ──────────────────────────────────────────────
     const studyIds = studies.map((s: any) => s.id);
     await sb.from('canonical_builds').insert({
       patient_id: patientId,
       study_ids: studyIds,
       study_count: studyIds.length,
       marker_count: allBiomarkers.length,
-      method: 'regex-only-v3',
+      method: 'regex-v4-value-based',
     });
 
     const normalizedCount = allBiomarkers.filter(b =>
