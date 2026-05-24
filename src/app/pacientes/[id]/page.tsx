@@ -411,11 +411,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setCanonicalMsg(data.message ?? '✅ Tabla canónica construida');
-      // CRITICAL: Do NOT call loadStudies() here.
-      // The canonical build only updates canonical_name and canonical_system fields.
-      // It does NOT touch value, flag, or is_edited.
-      // Calling loadStudies() would overwrite any manually edited values in local state
-      // with the original DB data, causing the "reversion" bug.
+      // Reload studies so the table re-renders with the fresh canonical_name values
+      // from the DB. Without this the table keeps showing stale in-memory groupings.
+      // All edits are safe: updateBiomarker() persists them to DB with is_edited=true,
+      // so getStudiesWithBiomarkers() returns the correct edited values.
+      await loadStudies();
     } catch (err: any) {
       setCanonicalMsg(`❌ Error: ${err.message}`);
       console.error('Error auto-building canonical:', err);
