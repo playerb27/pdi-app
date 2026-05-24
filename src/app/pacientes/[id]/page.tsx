@@ -1891,10 +1891,19 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                         : null;
                       const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
                       const isActive = activeStudyId === s.id;
-                      // Find ALL documents linked to this study (could be multiple after a merge)
-                      const studyDocs = documents.filter(
-                        (d) => d.study_id === s.id || (s.file_name && d.file_name === s.file_name)
-                      );
+                      // Find ALL documents linked to this study and sort so the
+                      // study's OWN original document (filename match) is always first.
+                      // Secondary documents (from recovered merges) follow after.
+                      const studyDocs = documents
+                        .filter((d) => d.study_id === s.id)
+                        .sort((a, b) => {
+                          // Own document (filename matches study) → first
+                          const aOwn = s.file_name && a.file_name === s.file_name ? 0 : 1;
+                          const bOwn = s.file_name && b.file_name === s.file_name ? 0 : 1;
+                          if (aOwn !== bOwn) return aOwn - bOwn;
+                          // Then by upload date (earliest first)
+                          return new Date(a.uploaded_at ?? 0).getTime() - new Date(b.uploaded_at ?? 0).getTime();
+                        });
                       return (
                         <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
                           <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}>

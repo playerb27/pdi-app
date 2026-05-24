@@ -9,19 +9,15 @@ export const dynamic = 'force-dynamic';
 // Recovers orphaned documents — those whose study_id points to a study that
 // has since been deleted (e.g. after a merge where docs were not re-linked).
 //
-// Algorithm:
-// 1. Load all current studies for the patient from the DB.
-// 2. Load the patient's index.json from Storage.
-// 3. Find documents whose study_id is NOT in the current study IDs list
-//    (these are orphaned).
-// 4. For each orphaned doc, try to find the correct study:
-//    a. Extract the date (YYYY-MM-DD) from the document's file_name.
-//    b. Find a study whose file_name or exam_date contains the same date.
-//    c. If found → re-link by updating study_id.
-//    d. If no date match → link to the study whose created_at is closest to
-//       the document's uploaded_at (last resort).
-// 5. Save the updated index.json.
-// 6. Return a report of what was recovered.
+// Matching priority (highest confidence first):
+//   1. EXACT filename match: doc.file_name === study.file_name
+//   2. Partial name similarity: largest common token between filenames
+//   3. Date match + highest biomarker count (merged study absorbs most)
+//   4. Nothing matched → leave as study_id = null (unlinked, no false assign)
+//
+// Deliberately avoids weak heuristics (temporal proximity, "most recent study")
+// that cause false assignments — better to leave a doc unlinked than link it
+// to the wrong study.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const getClient = () => createClient(
@@ -30,8 +26,28 @@ const getClient = () => createClient(
 );
 
 function extractDate(str: string): string | null {
-  const m = str.match(/(\d{4}-\d{2}-\d{2})/);
+  const m = (str ?? '').match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : null;
+}
+
+/** Tokenise a filename into lowercase words (strips extension, separators). */
+function tokenise(name: string): Set<string> {
+  return new Set(
+    (name ?? '')
+      .replace(/\.[^/.]+$/, '')           // remove extension
+      .toLowerCase()
+      .split(/[\s_\-.()/\\]+/)            // split on separators
+      .filter(t => t.length > 2)          // skip tiny tokens
+  );
+}
+
+/** Count shared tokens between two filenames. */
+function sharedTokens(a: string, b: string): number {
+  const ta = tokenise(a);
+  const tb = tokenise(b);
+  let count = 0;
+  for (const t of ta) if (tb.has(t)) count++;
+  return count;
 }
 
 export async function POST(
@@ -45,17 +61,27 @@ export async function POST(
       return NextResponse.json({ error: 'Falta patientId' }, { status: 400 });
     }
 
-    // ── Step 1: Load all current studies ─────────────────────────────────
+    // ── Step 1: Load studies WITH biomarker counts (to prefer merged study) ─
     const { data: studies, error: studiesErr } = await sb
       .from('studies')
-      .select('id, file_name, exam_date, created_at')
+      .select('id, file_name, exam_date, created_at, biomarkers(count)')
       .eq('patient_id', patientId);
 
     if (studiesErr) {
       return NextResponse.json({ error: studiesErr.message }, { status: 500 });
     }
 
-    const studyIds = new Set((studies ?? []).map((s: any) => s.id as string));
+    const studyList = (studies ?? []).map((s: any) => ({
+      id: s.id as string,
+      file_name: (s.file_name ?? '') as string,
+      exam_date: (s.exam_date ?? '') as string,
+      created_at: (s.created_at ?? '') as string,
+      biomarkerCount: Array.isArray(s.biomarkers)
+        ? s.biomarkers[0]?.count ?? 0
+        : 0,
+    }));
+
+    const studyIds = new Set(studyList.map(s => s.id));
 
     // ── Step 2: Load index.json ───────────────────────────────────────────
     const { data: indexData, error: indexErr } = await sb.storage
@@ -86,66 +112,77 @@ export async function POST(
       });
     }
 
-    // Pre-build a date→study map for fast lookup
-    const studyByDate: Record<string, any> = {};
-    for (const s of (studies ?? [])) {
-      const d1 = extractDate(s.exam_date ?? '');
-      const d2 = extractDate(s.file_name ?? '');
-      const d3 = extractDate(s.created_at ?? '');
-      if (d1) studyByDate[d1] = s;
-      if (d2 && !studyByDate[d2]) studyByDate[d2] = s;
-      if (d3 && !studyByDate[d3]) studyByDate[d3] = s;
-    }
-
-    // ── Step 4: Try to re-link each orphaned doc ──────────────────────────
+    // ── Step 4: Match each orphaned doc to the best study ────────────────
     let recovered = 0;
     let failed = 0;
     const recoveryLog: { file: string; linked_to: string; method: string }[] = [];
 
     for (const doc of orphaned) {
-      // a. Try date match from filename
       const docDate = extractDate(doc.file_name ?? '');
-      const matchByDate = docDate ? studyByDate[docDate] : null;
 
-      if (matchByDate) {
-        doc.study_id = matchByDate.id;
+      // ── 4a. Exact filename match ─────────────────────────────────────
+      const exactMatch = studyList.find(
+        s => s.file_name && s.file_name === doc.file_name
+      );
+      if (exactMatch) {
+        doc.study_id = exactMatch.id;
         recovered++;
-        recoveryLog.push({ file: doc.file_name, linked_to: matchByDate.id, method: `date:${docDate}` });
+        recoveryLog.push({ file: doc.file_name, linked_to: exactMatch.id, method: 'exact-filename' });
         continue;
       }
 
-      // b. Try date match from uploaded_at vs study created_at (closest in time)
-      if ((studies ?? []).length > 0) {
-        const uploadedAt = new Date(doc.uploaded_at ?? 0).getTime();
-        let closest: any = null;
-        let closestDiff = Infinity;
-        for (const s of (studies ?? [])) {
-          const diff = Math.abs(new Date(s.created_at).getTime() - uploadedAt);
-          if (diff < closestDiff) {
-            closestDiff = diff;
-            closest = s;
-          }
-        }
-        if (closest && closestDiff < 7 * 24 * 60 * 60 * 1000) { // within 7 days
-          doc.study_id = closest.id;
-          recovered++;
-          recoveryLog.push({ file: doc.file_name, linked_to: closest.id, method: 'closest-time' });
-          continue;
+      // ── 4b. Best token similarity (among studies with same date, or all) ─
+      // Candidates: prefer studies sharing the same date, fallback to all
+      const dateCandidates = docDate
+        ? studyList.filter(
+            s =>
+              extractDate(s.file_name) === docDate ||
+              extractDate(s.exam_date) === docDate
+          )
+        : [];
+      const candidates = dateCandidates.length > 0 ? dateCandidates : studyList;
+
+      // Score each candidate: shared tokens + bonus for higher biomarker count
+      // (the merged study typically has the highest count)
+      let bestStudy: typeof studyList[0] | null = null;
+      let bestScore = -1;
+
+      for (const s of candidates) {
+        const tokens = sharedTokens(doc.file_name ?? '', s.file_name);
+        // Add a small bonus so that among equal token matches, we prefer the
+        // study with more biomarkers (the merge target)
+        const score = tokens + s.biomarkerCount * 0.001;
+        if (score > bestScore) {
+          bestScore = score;
+          bestStudy = s;
         }
       }
 
-      // c. Could not match — link to the most recent study as fallback
-      if ((studies ?? []).length > 0) {
-        const sorted = [...(studies ?? [])].sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-        doc.study_id = sorted[0].id;
+      // Only use the match if there's at least ONE shared meaningful token
+      // (avoids linking to a completely unrelated study via 0-token "match")
+      if (bestStudy && bestScore >= 1) {
+        doc.study_id = bestStudy.id;
         recovered++;
-        recoveryLog.push({ file: doc.file_name, linked_to: sorted[0].id, method: 'fallback-latest' });
-      } else {
-        doc.study_id = null; // can't do anything without studies
-        failed++;
+        recoveryLog.push({
+          file: doc.file_name,
+          linked_to: bestStudy.id,
+          method: `tokens(${Math.floor(bestScore)})+date(${docDate ?? 'none'})`,
+        });
+        continue;
       }
+
+      // ── 4c. Date match alone (if only one study for that date) ────────
+      if (dateCandidates.length === 1) {
+        doc.study_id = dateCandidates[0].id;
+        recovered++;
+        recoveryLog.push({ file: doc.file_name, linked_to: dateCandidates[0].id, method: `date-unique:${docDate}` });
+        continue;
+      }
+
+      // ── 4d. No confident match → leave unlinked ──────────────────────
+      // Better to show no eye icon than to show the WRONG PDF.
+      doc.study_id = null;
+      failed++;
     }
 
     // ── Step 5: Save updated index.json ──────────────────────────────────
@@ -166,8 +203,8 @@ export async function POST(
       failed,
       log: recoveryLog,
       message: recovered > 0
-        ? `✅ ${recovered} documento${recovered > 1 ? 's' : ''} recuperado${recovered > 1 ? 's' : ''} y vinculado${recovered > 1 ? 's' : ''} a sus estudios.${failed > 0 ? ` ⚠️ ${failed} no pudieron vincularse.` : ''}`
-        : `⚠️ No se pudo recuperar ningún documento.`,
+        ? `✅ ${recovered} documento${recovered > 1 ? 's' : ''} recuperado${recovered > 1 ? 's' : ''}.${failed > 0 ? ` ${failed} sin coincidencia segura (se dejan sin vincular).` : ''}`
+        : `No se encontraron coincidencias seguras para ${failed} documento${failed > 1 ? 's' : ''} huérfano${failed > 1 ? 's' : ''}.`,
     });
   } catch (err: any) {
     console.error('Error POST recover documents:', err);
