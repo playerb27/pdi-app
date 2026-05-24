@@ -22,7 +22,9 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/insulina\s*(basal|en\s*ayuno|en\s*sangre|s[eé]rica|en\s*suero)?/i, 'Insulina'],
   [/p[eé]ptido\s*c\b/i,                               'Péptido C'],
 
-  [/glucosa\s*(basal|en\s*ayuno|en\s*sangre|en\s*suero|s[eé]rica|capilar)?/i, 'Glucosa'],
+  // Glucosa: anchored ^ and $ so a plain "GLUCOSA" from a urine study is NOT matched here
+  // and falls through to the specific urine rule below (line 116+).
+  [/^glucosa\s*(basal|en\s*ayuno|en\s*sangre|en\s*suero|s[eé]rica|capilar|postprandial|\d+h)?\s*\*{0,3}\s*$/i, 'Glucosa'],
 
   // ════════════════════════════════════════════════════════════════════════════
   // LÍPIDOS — más específico primero
@@ -344,10 +346,10 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   // ════════════════════════════════════════════════════════════════════════════
   // INMUNOLOGÍA
   // ════════════════════════════════════════════════════════════════════════════
-  [/\biga\b|inmunoglobulina\s*a\b/i,                                'IgA'],
-  [/\bige\b|inmunoglobulina\s*e\b/i,                                'IgE'],
-  [/\bigm\b|inmunoglobulina\s*m\b/i,                                'IgM'],
-  [/\bigg\b|inmunoglobulina\s*g\b/i,                                'IgG'],
+  [/\biga\b|inmunoglobulina\s*["'\u201c\u201d\u2018\u2019]?\s*a\s*["'\u201c\u201d\u2018\u2019]?\s*$/i, 'IgA'],
+  [/\bige\b|inmunoglobulina\s*["'\u201c\u201d\u2018\u2019]?\s*e\s*["'\u201c\u201d\u2018\u2019]?\s*$/i, 'IgE'],
+  [/\bigm\b|inmunoglobulina\s*["'\u201c\u201d\u2018\u2019]?\s*m\s*["'\u201c\u201d\u2018\u2019]?\s*$/i, 'IgM'],
+  [/\bigg\b|inmunoglobulina\s*["'\u201c\u201d\u2018\u2019]?\s*g\s*["'\u201c\u201d\u2018\u2019]?\s*$/i, 'IgG'],
 
   [/factor\s*reumatoide/i,                                             'Factor Reumatoide'],
   [/anti[\s\-]?ccp|anticuerpos?\s*anti[\s\-]?citrulina/i,            'Anti-CCP'],
