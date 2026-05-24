@@ -1904,13 +1904,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
               };
 
               return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
                   {groupOrder.map(key => {
                     const group = byDate[key];
-                    // Single study for this date → plain pill
+                    // Single study for this date → compact pill (auto width)
                     if (group.length === 1) return renderPill(group[0]);
 
-                    // Multiple studies from same date → grouped bracket
+                    // Multiple studies from same date → full-width bracket
                     const dp = datePrefix(group[0].file_name ?? '');
                     const dateLabel = dp
                       ? new Date(dp + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -1919,18 +1919,19 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                       <div
                         key={key}
                         style={{
-                          borderRadius: '12px',
-                          border: '1px solid rgba(59,130,246,0.35)',
-                          background: 'rgba(59,130,246,0.04)',
-                          padding: '6px 8px',
+                          width: '100%',
+                          borderRadius: '10px',
+                          border: '1px solid rgba(212,175,55,0.2)',
+                          background: 'rgba(212,175,55,0.04)',
+                          padding: '8px 10px 6px',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', paddingLeft: '4px' }}>
-                          <span style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', letterSpacing: '0.03em' }}>
-                            📦 {group.length} estudios · {dateLabel}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '7px' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--gold-primary)', opacity: 0.7, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                            {group.length} estudios · {dateLabel}
                           </span>
                         </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', paddingLeft: '4px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {group.map(s => renderPill(s))}
                         </div>
                       </div>
