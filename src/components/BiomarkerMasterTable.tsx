@@ -208,7 +208,18 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     [localStudies]
   );
 
-  const studyDates = useMemo(() => sortedStudies.map(s => getStudyDate(s)), [sortedStudies]);
+  // One column per UNIQUE date — multiple studies on the same day contribute
+  // to the same column (the pivot cells map already stores one value per dateKey).
+  const studyDates = useMemo(() => {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const s of sortedStudies) {
+      const d = getStudyDate(s);
+      if (!seen.has(d)) { seen.add(d); unique.push(d); }
+    }
+    return unique;
+  }, [sortedStudies]);
+
 
   // ── Build pivot rows ─────────────────────────────────────────────────────────
   const { catalogRows, unknownRows } = useMemo(() => {
