@@ -22,9 +22,10 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
   [/insulina\s*(basal|en\s*ayuno|en\s*sangre|s[eé]rica|en\s*suero)?/i, 'Insulina'],
   [/p[eé]ptido\s*c\b/i,                               'Péptido C'],
 
-  // Glucosa: anchored ^ and $ so a plain "GLUCOSA" from a urine study is NOT matched here
-  // and falls through to the specific urine rule below (line 116+).
-  [/^glucosa\s*(basal|en\s*ayuno|en\s*sangre|en\s*suero|s[eé]rica|capilar|postprandial|\d+h)?\s*\*{0,3}\s*$/i, 'Glucosa'],
+  // Glucosa en sangre: uses repeating qualifier group so it matches both
+  // "GLUCOSA" alone and multi-word like "GLUCOSA BASAL EN SANGRE" (after ** stripping).
+  // Anchored ^ and $ so "GLUCOSA (Orina)" falls through to the urine rule.
+  [/^glucosa(\s+(basal|en\s+ayuno|en\s+sangre|en\s+suero|s[eé]rica|capilar|postprandial|\d+h))*\s*$/i, 'Glucosa'],
 
   // ════════════════════════════════════════════════════════════════════════════
   // LÍPIDOS — más específico primero
@@ -365,7 +366,14 @@ const CANONICAL_ALIASES: [RegExp, string][] = [
 
 // ─── Normalize ──────────────────────────────────────────────────────────────
 export function normalizeBiomarkerName(raw: string): string {
-  const trimmed = raw.trim();
+  // Strip lab-artifact asterisks (**, *) from anywhere in the name before matching.
+  // e.g. "GLUCOSA ** (Orina)" → "GLUCOSA (Orina)"
+  //      "GLUCOSA BASAL EN SANGRE **" → "GLUCOSA BASAL EN SANGRE"
+  const trimmed = raw.trim()
+    .replace(/\s*\*+\s*/g, ' ')  // replace any run of * with a single space
+    .replace(/\s+/g, ' ')        // collapse multiple spaces
+    .trim();
+
   for (const [pattern, canonical] of CANONICAL_ALIASES) {
     if (canonical !== '' && pattern.test(trimmed)) return canonical;
   }

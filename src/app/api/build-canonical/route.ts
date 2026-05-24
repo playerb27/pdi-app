@@ -52,12 +52,38 @@ export async function POST(req: Request) {
       });
     }
 
-    const allBiomarkers = studies.flatMap((s: any) =>
-      (s.biomarkers ?? []).map((b: any) => ({
+    // ── Step 1.5: Orina study detection for retroactive disambiguation ────────
+    // Labs often report biomarker names without specimen context (just "GLUCOSA")
+    // in EGO studies. Detect orina studies by presence of exclusive EGO markers.
+    // Any study with NITRITOS or DENSIDAD ESPECIFICA is almost certainly an EGO.
+    const EGO_DETECTOR = /nitritos|densidad\s*especifica|urobilinogeno|leucocitos\s*esterasa|cuerpos\s*cetonicos/i;
+    // Biomarker names that are ambiguous (same in blood and urine) and need the (Orina) suffix
+    const AMBIGUOUS_IN_ORINA = /^(glucosa|proteinas|proteínas|bilirrubinas|leucocitos|eritrocitos|hemoglobina|color|aspecto|ph|celulas|bacterias|levaduras|hifas|filamento de mucina|cilindros|cristales|macrofagos)$/i;
+
+    const allBiomarkers = studies.flatMap((s: any) => {
+      const biomarkersInStudy: { id: string; rawName: string }[] = (s.biomarkers ?? []).map((b: any) => ({
         id: b.id as string,
         rawName: (b.raw_name ?? b.name) as string,
-      }))
-    );
+      }));
+
+      // Check if this study is an EGO (orina) study
+      const isOrinaStudy = biomarkersInStudy.some(b => EGO_DETECTOR.test(b.rawName));
+
+      if (isOrinaStudy) {
+        // Retag ambiguous biomarker names with (Orina) suffix so they don't
+        // pollute blood-test canonical names (e.g. "GLUCOSA" → "GLUCOSA (Orina)")
+        return biomarkersInStudy.map(b => {
+          const nameStripped = b.rawName.replace(/\s*\*+\s*/g, ' ').replace(/\s+/g, ' ').trim();
+          const needsSuffix = AMBIGUOUS_IN_ORINA.test(nameStripped);
+          return {
+            ...b,
+            rawName: needsSuffix ? `${nameStripped} (Orina)` : b.rawName,
+          };
+        });
+      }
+
+      return biomarkersInStudy;
+    });
 
     if (allBiomarkers.length === 0) {
       return NextResponse.json({ error: 'No hay biomarcadores para canonicalizar' }, { status: 404 });
