@@ -1818,10 +1818,24 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
                 // --- Perform merge ---
                 for (const src of sources) {
+                  // Re-link any documents from this source → target BEFORE deleting the source.
+                  // Without this, those PDFs become orphaned (study_id points to a deleted study)
+                  // and the eye icon can no longer find them.
+                  const srcDocs = documents.filter(
+                    (d) => d.study_id === src.id || (src.file_name && d.file_name === src.file_name)
+                  );
+                  for (const doc of srcDocs) {
+                    await fetch(`/api/pacientes/${id}/documents`, {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ docId: doc.id, study_id: target.id }),
+                    });
+                  }
                   await createBiomarkers(target.id, src.biomarkers as any ?? []);
                   await deleteStudy(src.id);
                 }
                 await loadStudies(); // reload after structural change
+                await loadDocuments(); // reload documents so eye icons reflect re-linked PDFs
                 await autoBuildCanonical();
 
                 // --- Arm undo ---
@@ -1872,7 +1886,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                         : null;
                       const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
                       const isActive = activeStudyId === s.id;
-                      const originalDoc = documents.find(d => d.study_id === s.id || (s.file_name && d.file_name === s.file_name));
+                      // Find ALL documents linked to this study (could be multiple after a merge)
+                      const studyDocs = documents.filter(
+                        (d) => d.study_id === s.id || (s.file_name && d.file_name === s.file_name)
+                      );
                       return (
                         <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
                           <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}>
@@ -1886,18 +1903,23 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                             )}
                           </button>
                           <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, paddingRight: '8px', gap: '4px' }}>
-                            {originalDoc && (
+                            {/* Eye icons — one per linked document (merged studies have multiple) */}
+                            {studyDocs.map((doc, docIdx) => (
                               <a
-                                href={originalDoc.public_url}
+                                key={doc.id}
+                                href={doc.public_url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                title="Ver archivo original"
-                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold-primary)', cursor: 'pointer', transition: 'all 0.2s' }}
+                                title={studyDocs.length > 1 ? `PDF ${docIdx + 1} de ${studyDocs.length}: ${doc.file_name}` : 'Ver archivo original'}
+                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold-primary)', cursor: 'pointer', transition: 'all 0.2s', position: 'relative' }}
                               >
                                 <Eye size={12} />
+                                {studyDocs.length > 1 && (
+                                  <span style={{ position: 'absolute', top: '-4px', right: '-4px', fontSize: '8px', fontWeight: 800, background: 'var(--gold-primary)', color: '#000', borderRadius: '50%', width: '12px', height: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{docIdx + 1}</span>
+                                )}
                               </a>
-                            )}
-                            {!originalDoc && (
+                            ))}
+                            {studyDocs.length === 0 && (
                               <label
                                 title="Adjuntar PDF de estudio original"
                                 style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-muted)', cursor: 'pointer', transition: 'all 0.2s' }}
