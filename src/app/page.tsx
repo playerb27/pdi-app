@@ -1,4 +1,5 @@
 'use client';
+export const dynamic = 'force-dynamic';
 import { useState, useEffect } from 'react';
 import { Plus, Search, X, Lock, Mail, Zap } from 'lucide-react';
 import { getPatients, createPatient, getPatientProgressBatch, getStudiesWithBiomarkers, getInterviewAnswers, Patient } from '@/lib/api';
