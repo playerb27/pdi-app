@@ -83,10 +83,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   // Upload state — per-file progress
   const [uploadQueue, setUploadQueue] = useState<{ name: string; status: 'reading' | 'analyzing' | 'saving' | 'done' | 'error'; msg?: string }[]>([]);
 
-  // Undo merge state
-  type MergeSnapshot = { target: any; sources: any[]; secondsLeft: number };
-  const [mergeUndo, setMergeUndo] = useState<MergeSnapshot | null>(null);
-  const undoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
 
   // Chat Assistant State
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -328,18 +325,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isChatOpen]);
 
-  // Countdown for undo
-  useEffect(() => {
-    if (!mergeUndo) return;
-    undoTimerRef.current = setInterval(() => {
-      setMergeUndo(prev => {
-        if (!prev) return null;
-        if (prev.secondsLeft <= 1) { clearInterval(undoTimerRef.current!); return null; }
-        return { ...prev, secondsLeft: prev.secondsLeft - 1 };
-      });
-    }, 1000);
-    return () => clearInterval(undoTimerRef.current!);
-  }, [mergeUndo?.target?.id]); // reset only when a new merge happens
+
 
   useEffect(() => { loadPatient(); loadStudies(); loadProgress(); loadDocuments(); }, [id]);
 
@@ -1795,213 +1781,162 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             </div>
 
             {studies.length > 0 && (() => {
-              // Group by DATE PREFIX in filename (e.g. "2026-04-27" from "2026-04-27a.pdf")
-              // This correctly detects same-lab-date studies regardless of upload date
+              // Helper: extract YYYY-MM-DD from filename
               const datePrefix = (fileName: string) => {
                 const match = fileName?.match(/(\d{4}-\d{2}-\d{2})/);
                 return match ? match[1] : null;
               };
-              const byFileName: Record<string, typeof studies> = {};
-              studies.forEach(s => {
-                const prefix = datePrefix(s.file_name ?? '') ?? `uid-${s.id}`;
-                if (!byFileName[prefix]) byFileName[prefix] = [];
-                byFileName[prefix].push(s);
-              });
-              const mergeableDates = Object.entries(byFileName).filter(([key, arr]) => arr.length > 1 && !key.startsWith('uid-'));
 
-              const handleMerge = async (group: typeof studies) => {
-                const dateStr = datePrefix(group[0].file_name ?? '') ?? 'esta fecha';
-                if (!confirm(`¿Fusionar ${group.length} estudios del ${dateStr}?\n\nLos biomarcadores se unirán en el primero y los demás se eliminarán.\n\n⚠️ Tendrás 60 segundos para deshacer.`)) return;
-
-                // --- Snapshot BEFORE merge (for undo) ---
-                const [target, ...sources] = group;
-                const snapshot: MergeSnapshot = {
-                  target: { ...target, biomarkers: [...(target.biomarkers ?? [])] },
-                  sources: sources.map(s => ({ ...s, biomarkers: [...(s.biomarkers ?? [])] })),
-                  secondsLeft: 60,
+              // Sort newest-first
+              const sorted = [...studies].sort((a, b) => {
+                const getT = (s: typeof studies[0]) => {
+                  const d = (s as any).exam_date ?? s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? s.created_at;
+                  return new Date(d).getTime();
                 };
+                return getT(b) - getT(a);
+              });
 
-                // --- Perform merge ---
-                for (const src of sources) {
-                  // Re-link any documents from this source → target BEFORE deleting the source.
-                  // Without this, those PDFs become orphaned (study_id points to a deleted study)
-                  // and the eye icon can no longer find them.
-                  const srcDocs = documents.filter(
-                    (d) => d.study_id === src.id || (src.file_name && d.file_name === src.file_name)
-                  );
-                  for (const doc of srcDocs) {
-                    await fetch(`/api/pacientes/${id}/documents`, {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ docId: doc.id, study_id: target.id }),
-                    });
-                  }
-                  await createBiomarkers(target.id, src.biomarkers as any ?? []);
-                  await deleteStudy(src.id);
-                }
-                await loadStudies(); // reload after structural change
-                await loadDocuments(); // reload documents so eye icons reflect re-linked PDFs
-                await autoBuildCanonical();
+              // Build ordered groups (preserves newest-first order)
+              const groupOrder: string[] = [];
+              const byDate: Record<string, typeof studies> = {};
+              for (const s of sorted) {
+                const key = datePrefix(s.file_name ?? '') ?? `uid-${s.id}`;
+                if (!byDate[key]) { byDate[key] = []; groupOrder.push(key); }
+                byDate[key].push(s);
+              }
 
-                // --- Arm undo ---
-                clearInterval(undoTimerRef.current!);
-                setMergeUndo(snapshot);
-              };
+              // Render one study pill — used solo and inside brackets
+              const renderPill = (s: typeof studies[0]) => {
+                const rawDate = (s as any).exam_date ?? null;
+                const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+                const bestDate = rawDate ?? fileDate;
+                const examDate = bestDate
+                  ? new Date(bestDate + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+                  : null;
+                const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+                const isActive = activeStudyId === s.id;
+                const originalDoc = documents.find((d) => d.study_id === s.id);
 
-              const handleUndoMerge = async () => {
-                if (!mergeUndo) return;
-                clearInterval(undoTimerRef.current!);
-                setMergeUndo(null);
-                // 1. Wipe target biomarkers back to original
-                await deleteBiomarkersForStudy(mergeUndo.target.id);
-                await createBiomarkers(mergeUndo.target.id, mergeUndo.target.biomarkers);
-                // 2. Recreate each source study with its original biomarkers
-                for (const src of mergeUndo.sources) {
-                  const newStudy = await createStudy(id, src.file_name, src.summary);
-                  if (newStudy) await createBiomarkers(newStudy.id, src.biomarkers);
-                }
-                await loadStudies(); // reload after structural change
-                await autoBuildCanonical();
+                return (
+                  <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
+                    <button
+                      onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }}
+                      style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}
+                    >
+                      {examDate ? (
+                        <>
+                          <span style={{ fontSize: '12px', fontWeight: 700, color: isActive ? 'var(--gold-primary)' : 'var(--text-primary)', display: 'block', lineHeight: 1.2 }}>📅 {examDate}</span>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block' }}>subido {uploadDate}</span>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate}</span>
+                      )}
+                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, paddingRight: '8px', gap: '4px' }}>
+                      {originalDoc ? (
+                        <a
+                          href={originalDoc.public_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={`Ver PDF original: ${originalDoc.file_name}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold-primary)', cursor: 'pointer', transition: 'all 0.2s' }}
+                        >
+                          <Eye size={12} />
+                        </a>
+                      ) : (
+                        <label
+                          title="Adjuntar PDF de estudio original"
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-muted)', cursor: 'pointer', transition: 'all 0.2s' }}
+                          onMouseEnter={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'var(--gold-primary)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--gold-primary)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'rgba(255,255,255,0.1)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--text-muted)'; }}
+                        >
+                          <Paperclip size={12} />
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            style={{ display: 'none' }}
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              await handleAttachDocument(s.id, file);
+                            }}
+                          />
+                        </label>
+                      )}
+                      {deleteConfirmId === s.id ? (
+                        <>
+                          <button
+                            onClick={async () => {
+                              setDeleteConfirmId(null);
+                              try {
+                                const relatedDoc = documents.find(d => d.study_id === s.id);
+                                if (relatedDoc) {
+                                  await fetch(`/api/pacientes/${id}/documents?docId=${relatedDoc.id}`, { method: 'DELETE' });
+                                }
+                                await deleteStudy(s.id);
+                                if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
+                                await loadStudies();
+                                await loadDocuments();
+                                await autoBuildCanonical();
+                              } catch (err: any) {
+                                showError(`Error al eliminar: ${err.message}`);
+                              }
+                            }}
+                            style={{ padding: '3px 8px', background: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#fff', fontSize: '11px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
+                          >
+                            Eliminar
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmId(null)}
+                            style={{ padding: '3px 7px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px' }}
+                          >✕</button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirmId(s.id)}
+                          style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }}
+                          title="Eliminar estudio"
+                        >×</button>
+                      )}
+                    </div>
+                  </div>
+                );
               };
 
               return (
-                <>
-                  {/* Undo banner */}
-                  {mergeUndo && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.25)', marginBottom: '10px' }}>
-                      <RotateCcw size={14} color="#ef4444" />
-                      <span style={{ fontSize: '12px', color: 'var(--text-secondary)', flex: 1 }}>Estudios fusionados. ¿Deshacer?</span>
-                      <span style={{ fontSize: '18px', fontWeight: 800, color: '#ef4444', minWidth: '28px', textAlign: 'center', lineHeight: 1 }}>{mergeUndo.secondsLeft}<span style={{ fontSize: '10px', fontWeight: 400 }}>s</span></span>
-                      <button onClick={handleUndoMerge} style={{ padding: '6px 14px', borderRadius: '7px', border: 'none', background: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <RotateCcw size={12} /> Deshacer
-                      </button>
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                    {[...studies].sort((a, b) => {
-                      const da = new Date((a as any).exam_date ?? a.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? a.created_at).getTime();
-                      const db = new Date((b as any).exam_date ?? b.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? b.created_at).getTime();
-                      return db - da;
-                    }).map((s) => {
-                      const rawDate = (s as any).exam_date ?? null;
-                      const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-                      const bestDate = rawDate ?? fileDate;
-                      const examDate = bestDate
-                        ? new Date(bestDate + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
-                        : null;
-                      const uploadDate = new Date(s.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
-                      const isActive = activeStudyId === s.id;
-                      // Find ALL documents linked to this study and sort so the
-                      // study's OWN original document (filename match) is always first.
-                      // Secondary documents (from recovered merges) follow after.
-                      const studyDocs = documents
-                        .filter((d) => d.study_id === s.id)
-                        .sort((a, b) => {
-                          // Own document (filename matches study) → first
-                          const aOwn = s.file_name && a.file_name === s.file_name ? 0 : 1;
-                          const bOwn = s.file_name && b.file_name === s.file_name ? 0 : 1;
-                          if (aOwn !== bOwn) return aOwn - bOwn;
-                          // Then by upload date (earliest first)
-                          return new Date(a.uploaded_at ?? 0).getTime() - new Date(b.uploaded_at ?? 0).getTime();
-                        });
-                      return (
-                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '4px', borderRadius: '20px', border: `1px solid ${isActive ? 'var(--gold-primary)' : 'var(--border-subtle)'}`, background: isActive ? 'rgba(212,175,55,0.1)' : 'transparent', overflow: 'hidden' }}>
-                          <button onClick={() => { setActiveStudyId(s.id); setAnalysisResult({ biomarkers: s.biomarkers as Biomarker[] ?? [], summary: s.summary }); }} style={{ padding: '6px 14px', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-main)', textAlign: 'left' }}>
-                            {examDate ? (
-                              <>
-                                <span style={{ fontSize: '12px', fontWeight: 700, color: isActive ? 'var(--gold-primary)' : 'var(--text-primary)', display: 'block', lineHeight: 1.2 }}>📅 {examDate}</span>
-                                <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'block' }}>subido {uploadDate}</span>
-                              </>
-                            ) : (
-                              <span style={{ fontSize: '11px', color: isActive ? 'var(--gold-primary)' : 'var(--text-muted)' }}>{uploadDate}</span>
-                            )}
-                          </button>
-                          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, paddingRight: '8px', gap: '4px' }}>
-                            {/* Eye icons — one per linked document (merged studies have multiple) */}
-                            {studyDocs.map((doc, docIdx) => (
-                              <a
-                                key={doc.id}
-                                href={doc.public_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={studyDocs.length > 1 ? `PDF ${docIdx + 1} de ${studyDocs.length}: ${doc.file_name}` : 'Ver archivo original'}
-                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.2)', color: 'var(--gold-primary)', cursor: 'pointer', transition: 'all 0.2s', position: 'relative' }}
-                              >
-                                <Eye size={12} />
-                                {studyDocs.length > 1 && (
-                                  <span style={{ position: 'absolute', top: '-4px', right: '-4px', fontSize: '8px', fontWeight: 800, background: 'var(--gold-primary)', color: '#000', borderRadius: '50%', width: '12px', height: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}>{docIdx + 1}</span>
-                                )}
-                              </a>
-                            ))}
-                            {studyDocs.length === 0 && (
-                              <label
-                                title="Adjuntar PDF de estudio original"
-                                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-muted)', cursor: 'pointer', transition: 'all 0.2s' }}
-                                onMouseEnter={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'var(--gold-primary)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--gold-primary)'; }}
-                                onMouseLeave={e => { (e.currentTarget as HTMLLabelElement).style.borderColor = 'rgba(255,255,255,0.1)'; (e.currentTarget as HTMLLabelElement).style.color = 'var(--text-muted)'; }}
-                              >
-                                <Paperclip size={12} />
-                                <input
-                                  type="file"
-                                  accept="application/pdf"
-                                  style={{ display: 'none' }}
-                                  onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    if (!file) return;
-                                    await handleAttachDocument(s.id, file);
-                                  }}
-                                />
-                              </label>
-                            )}
-                            {deleteConfirmId === s.id ? (
-                              <>
-                                <button
-                                  onClick={async () => {
-                                    setDeleteConfirmId(null);
-                                    try {
-                                      const relatedDoc = documents.find(d => d.study_id === s.id || (s.file_name && d.file_name === s.file_name));
-                                      if (relatedDoc) {
-                                        await fetch(`/api/pacientes/${id}/documents?docId=${relatedDoc.id}`, { method: 'DELETE' });
-                                      }
-                                      await deleteStudy(s.id);
-                                      if (activeStudyId === s.id) { setAnalysisResult(null); setActiveStudyId(null); }
-                                      await loadStudies(); // reload after structural change
-                                      await loadDocuments();
-                                      await autoBuildCanonical();
-                                    } catch (err: any) {
-                                      showError(`Error al eliminar: ${err.message}`);
-                                    }
-                                  }}
-                                  style={{ padding: '3px 8px', background: '#ef4444', border: 'none', borderRadius: '6px', cursor: 'pointer', color: '#fff', fontSize: '11px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
-                                >
-                                  Eliminar
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirmId(null)}
-                                  style={{ padding: '3px 7px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px' }}
-                                >
-                                  ✕
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmId(s.id)}
-                                style={{ padding: '4px 8px', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '14px', lineHeight: 1 }}
-                                title="Eliminar estudio"
-                              >×</button>
-                            )}
-                          </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
+                  {groupOrder.map(key => {
+                    const group = byDate[key];
+                    // Single study for this date → plain pill
+                    if (group.length === 1) return renderPill(group[0]);
+
+                    // Multiple studies from same date → grouped bracket
+                    const dp = datePrefix(group[0].file_name ?? '');
+                    const dateLabel = dp
+                      ? new Date(dp + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+                      : key;
+                    return (
+                      <div
+                        key={key}
+                        style={{
+                          borderRadius: '12px',
+                          border: '1px solid rgba(59,130,246,0.35)',
+                          background: 'rgba(59,130,246,0.04)',
+                          padding: '6px 8px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', paddingLeft: '4px' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: '#60a5fa', letterSpacing: '0.03em' }}>
+                            📦 {group.length} estudios · {dateLabel}
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
-                  {mergeableDates.map(([date, group]) => (
-                    <div key={date} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', borderRadius: '8px', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '11px', color: '#3b82f6' }}>🔗 {group.length} estudios del {date} pueden fusionarse</span>
-                      <button onClick={() => handleMerge(group)} style={{ padding: '3px 10px', borderRadius: '6px', border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: '11px', fontWeight: 600, fontFamily: 'var(--font-main)' }}>Fusionar</button>
-                    </div>
-                  ))}
-                </>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', paddingLeft: '4px' }}>
+                          {group.map(s => renderPill(s))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               );
             })()}
 
