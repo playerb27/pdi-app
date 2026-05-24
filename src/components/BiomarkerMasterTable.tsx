@@ -443,8 +443,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
               <th style={thStyle('50px', 'center')}>Unidad</th>
               <th style={thStyle('50px', 'center')}>Ref. Mín</th>
               <th style={thStyle('50px', 'center')}>Ref. Máx</th>
-              {sortedStudies.map((s, i) => {
-                const date = getStudyDate(s);
+              {studyDates.map((date, i) => {
                 const age = patientBirthDate ? getAgeAt(patientBirthDate, date) : null;
                 return (
                   <th key={i} style={{ ...thStyle('90px', 'center'), minWidth: 90 }}>
@@ -470,7 +469,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
                 <React.Fragment key={`group-${system}`}>
                   {/* System separator row */}
                   <tr>
-                    <td colSpan={4 + sortedStudies.length} style={{
+                    <td colSpan={4 + studyDates.length} style={{
                       padding: '8px 14px',
                       background: 'rgba(212,175,55,0.08)',
                       borderTop: '2px solid rgba(212,175,55,0.25)',
@@ -507,10 +506,9 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
                       <td style={{ ...tdStyle('var(--bg-surface)'), fontSize: 10, color: '#f87171', textAlign: 'center', minWidth: 50 }}>
                         {row.refMax ?? '—'}
                       </td>
-                      {/* Data cells */}
-                      {sortedStudies.map((s, ci) => {
-                        const dateKey = getStudyDate(s);
-                        const cell = row.cells[dateKey];
+                      {/* Data cells — one per unique date */}
+                      {studyDates.map((date, ci) => {
+                        const cell = row.cells[date];
                         return (
                           <td key={ci} style={{
                             textAlign: 'center',
