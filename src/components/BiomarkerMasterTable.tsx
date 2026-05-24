@@ -43,6 +43,12 @@ function getStudyDate(s: Study): string {
   return (s as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : s.created_at);
 }
 
+/** Normalize any date string → YYYY-MM-DD (used as grouping/column key). */
+function toDateKey(dateStr: string): string {
+  const m = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : dateStr;
+}
+
 function formatDateShort(iso: string): string {
   // If it's a plain date (YYYY-MM-DD), add noon time to avoid UTC→local shift
   const normalized = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T12:00:00' : iso;
@@ -208,14 +214,15 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     [localStudies]
   );
 
-  // One column per UNIQUE date — multiple studies on the same day contribute
-  // to the same column (the pivot cells map already stores one value per dateKey).
+  // One column per UNIQUE calendar date (YYYY-MM-DD).
+  // getStudyDate() may return full timestamps that differ per-study even on the
+  // same day — toDateKey() strips the time component before deduplicating.
   const studyDates = useMemo(() => {
     const seen = new Set<string>();
     const unique: string[] = [];
     for (const s of sortedStudies) {
-      const d = getStudyDate(s);
-      if (!seen.has(d)) { seen.add(d); unique.push(d); }
+      const key = toDateKey(getStudyDate(s));
+      if (!seen.has(key)) { seen.add(key); unique.push(key); }
     }
     return unique;
   }, [sortedStudies]);
@@ -227,7 +234,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     const dataMap: Record<string, PivotRow> = {};
 
     for (const study of sortedStudies) {
-      const dateKey = getStudyDate(study);
+      const dateKey = toDateKey(getStudyDate(study)); // always YYYY-MM-DD
       for (const bm of (study.biomarkers ?? [])) {
         const canonical = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
         const num = parseFloat(String(bm.value).replace(',', '.'));
