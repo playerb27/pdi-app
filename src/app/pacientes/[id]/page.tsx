@@ -248,12 +248,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       const data = await res.json();
       if (res.ok && data.token) {
         setInterviewToken(data.token);
-        // Auto-copy to clipboard
-        try {
-          await navigator.clipboard.writeText(data.url);
-          setShowTokenCopied(true);
-          setTimeout(() => setShowTokenCopied(false), 3000);
-        } catch (e) { /* clipboard may fail in some contexts */ }
+        // No auto-copy — user clicks "Link activo" to copy when ready
       } else {
         showError('No se pudo generar el link de entrevista');
       }
