@@ -1216,43 +1216,53 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <h1 style={{ fontSize: '26px', margin: 0, color: 'var(--text-primary)' }}>{patient.full_name}</h1>
               <button onClick={() => setIsEditModalOpen(true)} style={{ ...styles.iconBtn, color: 'var(--gold-primary)' }}><Edit2 size={16} /></button>
-              {/* ── Compact interview link button ── */}
-              <div style={{ position: 'relative' }} title={interviewToken ? 'Link de entrevista activo — clic para copiar o gestionar' : 'Generar link de entrevista para el paciente'}>
+              {/* ── Interview link buttons ── */}
+              {!interviewToken ? (
                 <button
-                  onClick={interviewToken ? handleCopyInterviewLink : handleGenerateInterviewToken}
+                  onClick={handleGenerateInterviewToken}
                   disabled={isGeneratingToken}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '5px',
-                    padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 600,
-                    border: interviewToken ? '1px solid rgba(34,197,94,0.4)' : '1px solid rgba(212,175,55,0.3)',
-                    background: interviewToken
-                      ? (showTokenCopied ? 'rgba(34,197,94,0.15)' : 'rgba(34,197,94,0.08)')
-                      : 'rgba(212,175,55,0.08)',
-                    color: interviewToken ? (showTokenCopied ? '#22c55e' : '#4ade80') : 'var(--gold-primary)',
+                    padding: '4px 12px', borderRadius: '99px', fontSize: '11px', fontWeight: 600,
+                    border: '1px solid rgba(212,175,55,0.35)',
+                    background: 'rgba(212,175,55,0.08)',
+                    color: 'var(--gold-primary)',
                     cursor: isGeneratingToken ? 'not-allowed' : 'pointer',
                     fontFamily: 'var(--font-main)', opacity: isGeneratingToken ? 0.6 : 1, transition: 'all 0.2s',
                   }}
                 >
                   <span style={{ fontSize: '12px' }}>🔗</span>
-                  <span>
-                    {isGeneratingToken ? 'Generando...' : interviewToken ? (showTokenCopied ? '✓ Copiado' : 'Link activo') : 'Generar link'}
-                  </span>
+                  <span>{isGeneratingToken ? 'Generando...' : 'Generar link'}</span>
                 </button>
-                {interviewToken && !showTokenCopied && (
+              ) : (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button
+                    onClick={handleCopyInterviewLink}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '5px',
+                      padding: '4px 12px', borderRadius: '99px', fontSize: '11px', fontWeight: 600,
+                      border: showTokenCopied ? '1px solid rgba(34,197,94,0.5)' : '1px solid rgba(212,175,55,0.35)',
+                      background: showTokenCopied ? 'rgba(34,197,94,0.12)' : 'rgba(212,175,55,0.08)',
+                      color: showTokenCopied ? '#22c55e' : 'var(--gold-primary)',
+                      cursor: 'pointer', fontFamily: 'var(--font-main)', transition: 'all 0.2s',
+                    }}
+                  >
+                    <span style={{ fontSize: '12px' }}>🔗</span>
+                    <span>{showTokenCopied ? '✓ Copiado' : 'Copiar link'}</span>
+                  </button>
                   <button
                     onClick={handleRevokeInterviewToken}
-                    title="Eliminar link de entrevista"
                     style={{
-                      position: 'absolute', top: '-6px', right: '-6px',
-                      width: '16px', height: '16px', borderRadius: '50%',
-                      border: '1px solid rgba(239,68,68,0.5)', background: 'var(--bg-main)',
-                      color: '#ef4444', cursor: 'pointer', fontSize: '9px', fontWeight: 800,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      lineHeight: 1, padding: 0, fontFamily: 'var(--font-main)',
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      padding: '4px 10px', borderRadius: '99px', fontSize: '11px', fontWeight: 600,
+                      border: '1px solid rgba(239,68,68,0.3)', background: 'transparent',
+                      color: '#ef4444', cursor: 'pointer', fontFamily: 'var(--font-main)', transition: 'all 0.2s',
                     }}
-                  >✕</button>
-                )}
-              </div>
+                  >
+                    <span>Eliminar link</span>
+                  </button>
+                </div>
+              )}
             </div>
             <p style={{ fontSize: '13px', marginTop: '4px', letterSpacing: '1px', textTransform: 'uppercase', fontFamily: 'var(--font-main)' }}>
               <span style={{ color: 'var(--gold-primary)' }}>
