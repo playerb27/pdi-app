@@ -16,8 +16,8 @@ const MODULE_DEFS: ModuleDef[] = [
 // ─── Inline SVG chart builder (mirrors FullWidthChart logic) ─────────────────
 function parseRef(ref?: string): { min: number | null; max: number | null } {
   if (!ref) return { min: null, max: null };
-  const m = ref.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
-  if (m) return { min: parseFloat(m[1]), max: parseFloat(m[2]) };
+  const m = ref.match(/([\d,.]+)\s*[-–]\s*([\d,.]+)/);
+  if (m) return { min: parseFloat(m[1].replace(',', '.')), max: parseFloat(m[2].replace(',', '.')) };
   const lt = ref.match(/[<≤]\s*(\d+\.?\d*)/);
   if (lt) return { min: null, max: parseFloat(lt[1]) };
   const gt = ref.match(/[>≥]\s*(\d+\.?\d*)/);
@@ -94,7 +94,7 @@ export function buildSeriesForPrint(
     if (!bm) continue;
     const v = parseFloat(bm.value);
     if (isNaN(v)) continue;
-    points.push({ date: study.study_date ?? study.created_at, value: v, flag: bm.flag ?? 'Normal' });
+    points.push({ date: study.exam_date ?? study.created_at, value: v, flag: bm.flag ?? 'Normal' });
     if (!unit) unit = bm.unit ?? '';
     if (!refRange && bm.reference_range) refRange = bm.reference_range;
   }
@@ -228,8 +228,8 @@ export function generatePrintHTML(
     const birth = new Date(patient.birth_date);
     let years = today.getFullYear() - birth.getFullYear();
     let months = today.getMonth() - birth.getMonth();
-    if (months < 0 || (months === 0 && today.getDate() < birth.getDate())) { years--; months += 12; }
-    if (today.getDate() < birth.getDate()) { months--; if (months < 0) months = 11; }
+    if (today.getDate() < birth.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
     return `${years} años y ${months} meses`;
   })();
   const dateStr = generatedAt.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });

@@ -95,7 +95,7 @@ export const BIOMARKER_CATALOG: CatalogEntry[] = [
   { name: 'Transferrina',               unit: 'mg/dL',        refMin: 200,   refMax: 360,  system: 'Sistema Inmune e Inflamación' },
   { name: 'TIBC',                       unit: 'µg/dL',        refMin: 250,   refMax: 370,  system: 'Sistema Inmune e Inflamación' },
   { name: 'Saturación de Transferrina',  unit: '%',            refMin: 20,    refMax: 50,   system: 'Sistema Inmune e Inflamación' },
-  { name: 'PCR',                        unit: 'mg/dL',        refMin: null,  refMax: 0.5,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'PCR',                        unit: 'mg/L',         refMin: null,  refMax: 5.0,  system: 'Sistema Inmune e Inflamación' },
   { name: 'VSG',                        unit: 'mm/hr',        refMin: null,  refMax: 20,   system: 'Sistema Inmune e Inflamación' },
   { name: 'IL-6',                       unit: 'pg/mL',        refMin: null,  refMax: 7.0,  system: 'Sistema Inmune e Inflamación' },
   { name: 'Factor Reumatoide',          unit: 'UI/mL',        refMin: null,  refMax: 14,   system: 'Sistema Inmune e Inflamación' },
@@ -104,6 +104,30 @@ export const BIOMARKER_CATALOG: CatalogEntry[] = [
   { name: 'IgA',                        unit: 'mg/dL',        refMin: 70,    refMax: 400,  system: 'Sistema Inmune e Inflamación' },
   { name: 'IgG',                        unit: 'mg/dL',        refMin: 700,   refMax: 1600, system: 'Sistema Inmune e Inflamación' },
   { name: 'IgM',                        unit: 'mg/dL',        refMin: 40,    refMax: 230,  system: 'Sistema Inmune e Inflamación' },
+
+  // ── COAGULACIÓN Y HEMOSTASIS ─────────────────────────────────────────────────
+  { name: 'Tiempo de Protrombina',      unit: 'seg',          refMin: 11,    refMax: 14,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'INR',                        unit: 'índice',       refMin: 0.8,   refMax: 1.2,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'TTPA (Tromboplastina Parcial)', unit: 'seg',       refMin: 25,    refMax: 35,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'D-Dímero',                   unit: 'µg/mL FEU',   refMin: null,  refMax: 0.5,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'Troponina I',                unit: 'ng/mL',        refMin: null,  refMax: 0.04, system: 'Sistema Inmune e Inflamación' },
+  { name: 'Troponina',                  unit: 'ng/mL',        refMin: null,  refMax: 0.04, system: 'Sistema Inmune e Inflamación' },
+  { name: 'CK (Creatincinasa)',         unit: 'U/L',          refMin: null,  refMax: 200,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'CK-MB',                      unit: 'U/L',          refMin: null,  refMax: 24,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'Procalcitonina',             unit: 'ng/mL',        refMin: null,  refMax: 0.1,  system: 'Sistema Inmune e Inflamación' },
+
+  // ── ENZIMAS DIGESTIVAS ────────────────────────────────────────────────────────
+  { name: 'Amilasa',                    unit: 'U/L',          refMin: 30,    refMax: 110,  system: 'Desintoxicación y Estrés Oxidativo' },
+  { name: 'Lipasa',                     unit: 'U/L',          refMin: null,  refMax: 60,   system: 'Desintoxicación y Estrés Oxidativo' },
+
+  // ── MARCADORES TUMORALES ───────────────────────────────────────────────────────
+  { name: 'PSA Total',                  unit: 'ng/mL',        refMin: null,  refMax: 4.0,  system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'PSA',                        unit: 'ng/mL',        refMin: null,  refMax: 4.0,  system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'CEA',                        unit: 'ng/mL',        refMin: null,  refMax: 3.0,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'CA 19-9',                    unit: 'U/mL',         refMin: null,  refMax: 37,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'CA 125',                     unit: 'U/mL',         refMin: null,  refMax: 35,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'CA 15-3',                    unit: 'U/mL',         refMin: null,  refMax: 30,   system: 'Sistema Inmune e Inflamación' },
+  { name: 'AFP (Alfa-Fetoproteína)',     unit: 'ng/mL',        refMin: null,  refMax: 8.1,  system: 'Sistema Inmune e Inflamación' },
 
   // ── SISTEMA ENDOCRINO (HORMONAL) ──────────────────────────────────────────────
   { name: 'TSH',                        unit: 'mUI/L',        refMin: 0.27,  refMax: 4.2,  system: 'Sistema Endocrino (Hormonal)' },
@@ -119,6 +143,16 @@ export const BIOMARKER_CATALOG: CatalogEntry[] = [
   { name: 'IGF-1',                      unit: 'ng/mL',        refMin: 115,   refMax: 307,  system: 'Sistema Endocrino (Hormonal)' },
   { name: 'Hormona del Crecimiento (GH)', unit: 'ng/mL',       refMin: null,  refMax: 3.0,  system: 'Sistema Endocrino (Hormonal)' },
   { name: 'PTH (Parathormona)',         unit: 'pg/mL',        refMin: 15,    refMax: 65,   system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'Cortisol PM',                unit: 'µg/dL',        refMin: null,  refMax: 8.0,  system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'Estradiol',                  unit: 'pg/mL',        refMin: null,  refMax: null, system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'Progesterona',               unit: 'ng/mL',        refMin: null,  refMax: null, system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'FSH',                        unit: 'mUI/mL',       refMin: null,  refMax: null, system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'LH',                         unit: 'mUI/mL',       refMin: null,  refMax: null, system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'SHBG',                       unit: 'nmol/L',       refMin: null,  refMax: null, system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'Beta-HCG',                   unit: 'mUI/mL',       refMin: null,  refMax: 5,    system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'Aldosterona',                unit: 'ng/dL',        refMin: null,  refMax: 31,   system: 'Sistema Endocrino (Hormonal)' },
+  { name: 'IgE',                        unit: 'UI/mL',        refMin: null,  refMax: 100,  system: 'Sistema Inmune e Inflamación' },
+  { name: 'Vitamina B1 (Tiamina)',      unit: 'nmol/L',       refMin: 66,    refMax: 200,  system: 'Salud Neurológica y Cognitiva' },
 
   // ── SALUD NEUROLÓGICA Y COGNITIVA ─────────────────────────────────────────────
   { name: 'Vitamina B12',               unit: 'pg/mL',        refMin: 200,   refMax: 900,  system: 'Salud Neurológica y Cognitiva' },
@@ -141,11 +175,13 @@ export function getCatalogEntry(canonicalName: string): CatalogEntry | null {
 
 /**
  * Determina el flag correcto comparando el valor contra el catálogo.
- * Más confiable que el flag devuelto por la IA.
+ * Retorna null si el marcador no está en el catálogo (el llamador debe usar el flag de la IA).
+ * IMPORTANTE: No retorna 'Normal' para marcadores desconocidos — eso ocultaría valores anómalos.
  */
-export function computeFlag(canonicalName: string, value: number): 'Normal' | 'Alto' | 'Bajo' {
+export function computeFlag(canonicalName: string, value: number): 'Normal' | 'Alto' | 'Bajo' | null {
   const entry = getCatalogEntry(canonicalName);
-  if (!entry) return 'Normal';
+  if (!entry) return null; // marcador desconocido — usar flag de la IA
+  if (entry.refMin === null && entry.refMax === null) return null; // sin rangos definidos
   if (entry.refMax !== null && value > entry.refMax) return 'Alto';
   if (entry.refMin !== null && value < entry.refMin) return 'Bajo';
   return 'Normal';

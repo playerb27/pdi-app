@@ -106,8 +106,8 @@ DATOS DEL PACIENTE:
         );
 
       contextStr += `ENTREVISTA CLÍNICA PDI:\n`;
-      baseEntries.forEach(([, v]) => {
-        contextStr += `• ${(v as string).replace(/\|\|/g, ', ')}\n`;
+      baseEntries.forEach(([k, v]) => {
+        contextStr += `• [${k}]: ${(v as string).replace(/\|\|/g, ', ')}\n`;
       });
 
       if (differentialSection) contextStr += differentialSection;
@@ -128,7 +128,7 @@ DATOS DEL PACIENTE:
       history: [
         { role: 'user', parts: [{ text: contextStr + '\n\nEntendido. Ahora responderé únicamente basándome en este perfil clínico.' }] },
         { role: 'model', parts: [{ text: 'Comprendido. Actuaré como el Asistente Clínico Experto para analizar y opinar sobre este paciente basado estrictamente en sus datos. Estoy listo para tus preguntas.' }] },
-        ...(chatHistory ?? []).map((h: any) => ({
+        ...(chatHistory ?? []).slice(-20).map((h: any) => ({
           role: h.role,
           parts: [{ text: h.text }]
         }))

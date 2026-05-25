@@ -5,6 +5,7 @@ import type { ChartSeries } from './ExpandedChartModal';
 import ExpandedChartModal from './ExpandedChartModal';
 
 function flagColor(flag: string) {
+  if (flag === 'Excluido') return 'rgba(255,255,255,0.2)';
   return flag === 'Alto' ? '#ef4444' : flag === 'Bajo' ? '#3b82f6' : '#22c55e';
 }
 
@@ -28,7 +29,7 @@ export function FullWidthChart({ series, onClick }: { series: ChartSeries; onCli
 
   const ref = parseRef(series.referenceRange);
   const values = series.points.map(p => p.value);
-  const refVals = [ref.min, ref.max].filter(Boolean) as number[];
+  const refVals = [ref.min, ref.max].filter((v): v is number => v !== null && v !== undefined) as number[];
   const allVals = [...values, ...refVals];
   const rawMin = Math.min(...allVals);
   const rawMax = Math.max(...allVals);
@@ -69,7 +70,7 @@ export function FullWidthChart({ series, onClick }: { series: ChartSeries; onCli
           <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', marginLeft: '5px' }}>{series.unit}</span>
           {series.points.length > 1 && (
             <p style={{ margin: '3px 0 0', fontSize: '11px', color: trend > 0 ? (lastFlag === 'Alto' ? '#ef4444' : '#22c55e') : '#3b82f6', textAlign: 'right' }}>
-              {trend > 0 ? '↑' : '↓'} {Math.abs(Number(trendPct))}% desde el inicio
+              {trend > 0 ? '↑' : trend < 0 ? '↓' : '→'} {Math.abs(Number(trendPct))}% desde el inicio
             </p>
           )}
         </div>
@@ -127,7 +128,7 @@ export function FullWidthChart({ series, onClick }: { series: ChartSeries; onCli
 
           {series.points.map((pt, i) => (
             <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.25)">
-              {new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+              {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
             </text>
           ))}
 
@@ -138,7 +139,7 @@ export function FullWidthChart({ series, onClick }: { series: ChartSeries; onCli
                 {series.points[tooltip.i].value} {series.unit}
               </text>
               <text x={toX(tooltip.i)} y={tooltip.y - 12} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.4)">
-                {new Date(series.points[tooltip.i].date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
+                {new Date(/^\d{4}-\d{2}-\d{2}$/.test(series.points[tooltip.i].date) ? series.points[tooltip.i].date + 'T12:00:00' : series.points[tooltip.i].date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
               </text>
             </g>
           )}
@@ -168,25 +169,36 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
 
   // Called when ExpandedChartModal saves an edited point
   const handleValueUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
-    const updatedValue = parseFloat(newValue);
-    if (isNaN(updatedValue)) return;
-    setLocalSeries(prev => prev.map(s => ({
-      ...s,
-      points: s.points.map(p =>
-        p.biomarkerId === biomarkerId && p.studyId === studyId
-          ? { ...p, value: updatedValue, flag: newFlag }
-          : p
-      ),
-    })));
-    setExpandedSeries(prev => prev ? {
-      ...prev,
-      points: prev.points.map(p =>
-        p.biomarkerId === biomarkerId && p.studyId === studyId
-          ? { ...p, value: updatedValue, flag: newFlag }
-          : p
-      ),
-    } : null);
-    // Propagate up to page.tsx so studies state gets updated
+    if (newFlag === 'Excluido') {
+      // Point was deleted — filter it out from local state
+      setLocalSeries(prev => prev.map(s => ({
+        ...s,
+        points: s.points.filter(p => !(p.biomarkerId === biomarkerId && p.studyId === studyId)),
+      })));
+      setExpandedSeries(prev => prev ? {
+        ...prev,
+        points: prev.points.filter(p => !(p.biomarkerId === biomarkerId && p.studyId === studyId)),
+      } : null);
+    } else {
+      const updatedValue = parseFloat(newValue);
+      setLocalSeries(prev => prev.map(s => ({
+        ...s,
+        points: s.points.map(p =>
+          p.biomarkerId === biomarkerId && p.studyId === studyId
+            ? { ...p, value: isNaN(updatedValue) ? p.value : updatedValue, flag: newFlag }
+            : p
+        ),
+      })));
+      setExpandedSeries(prev => prev ? {
+        ...prev,
+        points: prev.points.map(p =>
+          p.biomarkerId === biomarkerId && p.studyId === studyId
+            ? { ...p, value: isNaN(updatedValue) ? p.value : updatedValue, flag: newFlag }
+            : p
+        ),
+      } : null);
+    }
+    // Propagate up to page.tsx
     onValueUpdated?.(biomarkerId, newValue, newFlag, studyId);
   };
 

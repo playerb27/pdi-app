@@ -157,7 +157,8 @@ export async function getStudiesWithBiomarkers(patientId: string): Promise<Study
     .from('studies')
     .select('*, biomarkers(*)')
     .eq('patient_id', patientId)
-    .order('created_at', { ascending: false });
+    .order('exam_date', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true });
   if (error) { console.error("Error fetching studies:", error.message); return []; }
   return studies || [];
 }
@@ -236,10 +237,11 @@ export async function upsertInterviewAnswer(
   questionId: string,
   answer: string
 ): Promise<void> {
-  await supabase.from('interviews').upsert(
+  const { error } = await supabase.from('interviews').upsert(
     { patient_id: patientId, question_id: questionId, answer, updated_at: new Date().toISOString() },
     { onConflict: 'patient_id,question_id' }
   );
+  if (error) console.error('[upsertInterviewAnswer] Error:', error.message);
 }
 
 export async function getInterviewAnswers(
@@ -353,7 +355,7 @@ export async function saveComparativeGroup(patientId: string, markers: string[])
   if (!patient) return;
   const existing = patient.comparative_groups ?? [];
   const newGroup: ComparativeGroup = {
-    id: Date.now().toString(),
+    id: crypto.randomUUID(),
     markers,
     createdAt: new Date().toISOString(),
   };

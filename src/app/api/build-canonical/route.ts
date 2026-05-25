@@ -91,7 +91,7 @@ export async function POST(req: Request) {
           AMBIGUOUS_BLOOD_OR_ORINA.test(nameStripped) &&
           isQualitativeValue(String(b.value ?? ''))
             ? `${nameStripped} (Orina)`
-            : (b.raw_name ?? b.name) as string;
+            : nameStripped;  // use stripped version, not original with ** artifacts
 
         return { id: b.id as string, rawName };
       })

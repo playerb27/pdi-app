@@ -33,6 +33,7 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
 
 function flagColor(flag: string, isEdited?: boolean) {
   if (isEdited) return '#d4af37';
+  if (flag === 'Excluido') return 'rgba(255,255,255,0.2)';
   return flag === 'Alto' ? '#ef4444' : flag === 'Bajo' ? '#3b82f6' : '#22c55e';
 }
 
@@ -45,6 +46,7 @@ interface Props {
 }
 
 export default function ExpandedChartModal({ series, patientId, onClose, onValueUpdated, documents }: Props) {
+  const gradId = `exp-area-grad-${series.name.replace(/\W/g, '')}`;
   const [points, setPoints] = useState<ChartPoint[]>(series.points.filter(p => p.flag !== 'Excluido'));
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
@@ -58,7 +60,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
     if (editIdx === null && !saving) {
       setPoints(series.points.filter(p => p.flag !== 'Excluido'));
     }
-  }, [series.points]);
+  }, [series.points, series.name]);
 
   const W = 720, H = 300;
   const PAD = { top: 40, right: 32, bottom: 48, left: 56 };
@@ -67,7 +69,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
 
   const ref = parseRef(series.referenceRange);
   const values = points.map(p => p.value);
-  const refVals = [ref.min, ref.max].filter(Boolean) as number[];
+  const refVals = [ref.min, ref.max].filter((v): v is number => v !== null && v !== undefined) as number[];
   const allVals = [...values, ...refVals];
   const rawMin = Math.min(...allVals);
   const rawMax = Math.max(...allVals);
@@ -166,7 +168,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)' }} onClick={onClose}>
-      <div style={{ background: 'linear-gradient(145deg, #0f0f1a, #12121f)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: '24px', padding: '36px 40px', width: '820px', maxWidth: '95vw', boxShadow: '0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.1)', position: 'relative' }} onClick={e => e.stopPropagation()}>
+      <div style={{ background: 'linear-gradient(145deg, #0f0f1a, #12121f)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: '24px', padding: '36px 40px', width: '820px', maxWidth: '95vw', maxHeight: '95vh', overflowY: 'auto', boxShadow: '0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(212,175,55,0.1)', position: 'relative' }} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
@@ -193,7 +195,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
         <div style={{ position: 'relative', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', padding: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
           <svg width={W} height={H} style={{ overflow: 'visible', maxWidth: '100%' }}>
             <defs>
-              <linearGradient id="exp-area-grad" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={lc} stopOpacity="0.3" />
                 <stop offset="100%" stopColor={lc} stopOpacity="0.02" />
               </linearGradient>
@@ -232,7 +234,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
             })()}
 
             {/* Area + line */}
-            <polygon points={area} fill="url(#exp-area-grad)" />
+            <polygon points={area} fill={`url(#${gradId})`} />
             {points.length > 1 && <polyline points={polyline} fill="none" stroke={lc} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />}
 
             {/* Data points */}
@@ -250,7 +252,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
             {/* X axis labels */}
             {points.map((pt, i) => (
               <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.3)">
-                {new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+              {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
               </text>
             ))}
 
@@ -268,7 +270,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
                   )}
                   <text x={toX(tooltip.i)} y={tooltip.y - 24} textAnchor="middle" fontSize="13" fontWeight="bold" fill={strokeColor}>{pt.value} {series.unit}</text>
                   <text x={toX(tooltip.i)} y={tooltip.y - 12} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.4)">
-                    {new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
                   </text>
                   <text x={toX(tooltip.i)} y={tooltip.y - rectH - 10} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.3)">clic para editar</text>
                 </g>

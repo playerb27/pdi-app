@@ -24,8 +24,8 @@ function buildPrompt(
     const birth = new Date(patient.birth_date);
     let years = today.getFullYear() - birth.getFullYear();
     let months = today.getMonth() - birth.getMonth();
-    if (months < 0 || (months === 0 && today.getDate() < birth.getDate())) { years--; months += 12; }
-    if (today.getDate() < birth.getDate()) { months--; if (months < 0) months = 11; }
+    if (today.getDate() < birth.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
     return `${years} años y ${months} meses`;
   })();
 

@@ -46,7 +46,11 @@ function getStudyDate(s: Study): string {
 /** Normalize any date string → YYYY-MM-DD (used as grouping/column key). */
 function toDateKey(dateStr: string): string {
   const m = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : dateStr;
+  if (m) return m[1];
+  // Fallback: parse as Date and extract YYYY-MM-DD
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return dateStr; // last resort
 }
 
 function formatDateShort(iso: string): string {
@@ -95,7 +99,7 @@ function EditableCell({ cell, row, documents, onSave }: {
   const handleSave = async () => {
     if (!cell.biomarkerId) return;
     const num = parseFloat(val.replace(',', '.'));
-    const newFlag = isNaN(num) ? cell.flag : computeFlag(row.name, num);
+    const newFlag = isNaN(num) ? cell.flag : (computeFlag(row.name, num) ?? cell.flag);
     setSaving(true);
     // Clean replace — no originalValue tracking
     const ok = await updateBiomarker(cell.biomarkerId, {
@@ -236,7 +240,9 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     for (const study of sortedStudies) {
       const dateKey = toDateKey(getStudyDate(study)); // always YYYY-MM-DD
       for (const bm of (study.biomarkers ?? [])) {
-        const canonical = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
+        // Use lowercase as the dataMap key for case-insensitive lookups
+        const rawCanonical = (bm as any).canonical_name ?? normalizeBiomarkerName(bm.name);
+        const canonical = rawCanonical.toLowerCase();
         const num = parseFloat(String(bm.value).replace(',', '.'));
         const rawStr = String(bm.value ?? '').trim();
         // Accept numeric values OR meaningful text values (Negativo, Positivo, 1:80, etc.)
@@ -246,11 +252,13 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         if ((bm as any).flag === 'Excluido') continue;  // doctor marked as "no graficar"
 
         const catalogEntry = getCatalogEntry(canonical);
-        const flag = isNaN(num) ? (bm.flag as any) ?? 'Normal' : computeFlag(canonical, num);
+        const flag = isNaN(num) ? (bm.flag as any) ?? 'Normal' : (computeFlag(canonical, num) ?? (bm.flag as any) ?? 'Normal');
+        // Use catalog's properly-cased name for display; fall back to original pre-lowercase canonical
+        const displayName = catalogEntry?.name ?? rawCanonical;
 
         if (!dataMap[canonical]) {
           dataMap[canonical] = {
-            name: canonical,
+            name: displayName,
             unit: catalogEntry?.unit ?? bm.unit,
             refMin: catalogEntry?.refMin ?? null,
             refMax: catalogEntry?.refMax ?? null,
@@ -284,9 +292,9 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     const catalogNames = new Set(BIOMARKER_CATALOG.map(e => e.name.toLowerCase()));
 
     const catalogRows: PivotRow[] = BIOMARKER_CATALOG
-      .filter(entry => dataMap[entry.name.toLowerCase()] || dataMap[entry.name])
-      .map(entry => dataMap[entry.name] ?? dataMap[entry.name.toLowerCase()])
-      .filter(Boolean);
+      .filter(entry => !!dataMap[entry.name.toLowerCase()])
+      .map(entry => dataMap[entry.name.toLowerCase()])
+      .filter(Boolean) as PivotRow[];
 
     const unknownRows: PivotRow[] = Object.values(dataMap)
       .filter(row => !catalogNames.has(row.name.toLowerCase()))
@@ -443,10 +451,10 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
               <th style={thStyle('50px', 'center')}>Unidad</th>
               <th style={thStyle('50px', 'center')}>Ref. Mín</th>
               <th style={thStyle('50px', 'center')}>Ref. Máx</th>
-              {studyDates.map((date, i) => {
+              {studyDates.map((date) => {
                 const age = patientBirthDate ? getAgeAt(patientBirthDate, date) : null;
                 return (
-                  <th key={i} style={{ ...thStyle('90px', 'center'), minWidth: 90 }}>
+                  <th key={date} style={{ ...thStyle('90px', 'center'), minWidth: 90 }}>
                     <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--gold-primary)' }}>
                       {formatDateShort(date)}
                     </span>
@@ -507,10 +515,10 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
                         {row.refMax ?? '—'}
                       </td>
                       {/* Data cells — one per unique date */}
-                      {studyDates.map((date, ci) => {
+                      {studyDates.map((date) => {
                         const cell = row.cells[date];
                         return (
-                          <td key={ci} style={{
+                          <td key={date} style={{
                             textAlign: 'center',
                             padding: '4px 6px',
                             background: cell ? cellBg(cell.flag) : 'transparent',
@@ -583,7 +591,11 @@ function tdStyle(bg = 'transparent'): React.CSSProperties {
 
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 function exportToCSV(rows: PivotRow[], studyDates: string[], studies: Study[]) {
-  const dateLabels = studyDates.map(d => new Date(d).toLocaleDateString('es-MX'));
+  const dateLabels = studyDates.map(d => {
+    // Add T12:00:00 to avoid UTC→local shift (same fix as formatDateShort)
+    const normalized = /^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T12:00:00' : d;
+    return new Date(normalized).toLocaleDateString('es-MX');
+  });
   const header = ['Marcador', 'Unidad', 'Ref. Mín', 'Ref. Máx', ...dateLabels];
 
   const lines: string[][] = [header];

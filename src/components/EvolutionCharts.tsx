@@ -357,7 +357,7 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
   // Notify parent whenever the processed series map changes
   // so ComparativeModal always gets the correctly-deduplicated data
   // Must be useEffect (not useMemo) — calling parent setState during render is illegal in React 19
-  useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap]);
+  useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap, onSeriesReady]);
 
   // Apply localStorage overrides AFTER dedup — user edits always win
   // NOTE: overrides now come from Supabase (is_edited flag), no localStorage needed.

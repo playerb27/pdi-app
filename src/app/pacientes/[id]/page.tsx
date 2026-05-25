@@ -309,7 +309,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   useEffect(() => {
     const key = `pdi_tab_${id}`;
     const saved = localStorage.getItem(key) as typeof activeTab | null;
-    if (saved && ['estudios', 'evolucion', 'tabla', 'consulta'].includes(saved)) {
+    if (saved && ['estudios', 'evolucion', 'tabla', 'consulta', 'documentos'].includes(saved)) {
       setActiveTab(saved);
       if (saved === 'tabla') setIsTreeOpen(false);
     }
@@ -437,8 +437,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       };
       const sorted = [...data].sort((a, b) => new Date(getStudyDate(b)).getTime() - new Date(getStudyDate(a)).getTime());
       const newest = sorted[0];
-      setActiveStudyId(newest.id);
-      setAnalysisResult({ biomarkers: (newest.biomarkers ?? []) as Biomarker[], summary: newest.summary });
+      // Only switch to newest if no study is currently selected, or the selected one was deleted
+      if (!activeStudyId || !data.find((s: Study) => s.id === activeStudyId)) {
+        setActiveStudyId(newest.id);
+        setAnalysisResult({ biomarkers: (newest.biomarkers ?? []) as Biomarker[], summary: newest.summary });
+      }
     }
   };
 
@@ -798,8 +801,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     const birth = new Date(birthDate);
     let years = today.getFullYear() - birth.getFullYear();
     let months = today.getMonth() - birth.getMonth();
-    if (months < 0 || (months === 0 && today.getDate() < birth.getDate())) { years--; months += 12; }
-    if (today.getDate() < birth.getDate()) { months--; if (months < 0) months = 11; }
+    if (today.getDate() < birth.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
     return `${years} años, ${months} meses`;
   };
 
@@ -970,7 +973,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 const study = studies.find(s => s.id === editBm.studyId);
                 const studyDateLabel = study
                   ? (() => {
-                      const raw = (study as any).exam_date ?? study.file_name?.match(/(\.\d{4}-\d{2}-\d{2})/)?.[1] ?? study.created_at?.slice(0, 10);
+                      const raw = (study as any).exam_date ?? study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? study.created_at?.slice(0, 10);
                       if (!raw) return null;
                       return new Date(raw + (raw.length === 10 ? 'T12:00:00' : '')).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
                     })()
@@ -1869,8 +1872,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                             onClick={async () => {
                               setDeleteConfirmId(null);
                               try {
-                                const relatedDoc = documents.find(d => d.study_id === s.id);
-                                if (relatedDoc) {
+                                const relatedDocs = documents.filter(d => d.study_id === s.id);
+                                for (const relatedDoc of relatedDocs) {
                                   await fetch(`/api/pacientes/${id}/documents?docId=${relatedDoc.id}`, { method: 'DELETE' });
                                 }
                                 await deleteStudy(s.id);

@@ -32,7 +32,11 @@ function readAll(): BiomarkerOverride[] {
 
 function writeAll(overrides: BiomarkerOverride[]) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(overrides));
+  } catch (e) {
+    console.error('[PDI] Could not save biomarker overrides to localStorage:', e);
+  }
 }
 
 /** Save or update an override for a biomarker edit */

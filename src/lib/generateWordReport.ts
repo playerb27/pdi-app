@@ -15,7 +15,7 @@ const C = {
 };
 
 const MODULE_COLORS: Record<number, string> = {
-  1: C.blue, 2: C.purple, 3: C.teal, 4: C.amber, 5: C.green,
+  1: C.blue, 2: C.purple, 3: C.teal, 4: C.amber, 5: C.green, 6: 'B8922A',
 };
 const MODULE_TITLES: Record<number, string> = {
   1: 'Perfil Integral del Paciente',
@@ -23,9 +23,10 @@ const MODULE_TITLES: Record<number, string> = {
   3: 'Evaluación Clínica Sistémica',
   4: 'Diagnósticos Posibles y Correlaciones',
   5: 'Plan de Intervención Integral',
+  6: 'Gráficas Comparativas',
 };
 const MODULE_ICONS: Record<number, string> = {
-  1: 'MÓDULO 1', 2: 'MÓDULO 2', 3: 'MÓDULO 3', 4: 'MÓDULO 4', 5: 'MÓDULO 5',
+  1: 'MÓDULO 1', 2: 'MÓDULO 2', 3: 'MÓDULO 3', 4: 'MÓDULO 4', 5: 'MÓDULO 5', 6: 'MÓDULO 6',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -147,8 +148,8 @@ function buildCover(patient: any, approvedNums: number[], dateStr: string): Para
     const birth = new Date(patient.birth_date);
     let years = today.getFullYear() - birth.getFullYear();
     let months = today.getMonth() - birth.getMonth();
-    if (months < 0 || (months === 0 && today.getDate() < birth.getDate())) { years--; months += 12; }
-    if (today.getDate() < birth.getDate()) { months--; if (months < 0) months = 11; }
+    if (today.getDate() < birth.getDate()) months--;
+    if (months < 0) { years--; months += 12; }
     return `${years} años y ${months} meses`;
   })();
 
@@ -371,19 +372,20 @@ function buildM2Tables(content: string): (Paragraph | Table)[] {
 // ─── Evolution charts via QuickChart.io ──────────────────────────────────────
 async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)[]> {
   // Group biomarker values across studies by normalized name
-  const map = new Map<string, { date: string; value: number; unit: string; flag: string }[]>();
+  const map = new Map<string, { date: string; isoDate: string; value: number; unit: string; flag: string }[]>();
 
   for (const study of studies) {
-    const dateLabel = study.exam_date
-      ? new Date(study.exam_date + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
-      : new Date(study.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+      const rawDate = study.exam_date ?? study.created_at;
+      const dateLabel = rawDate
+        ? new Date(study.exam_date ? study.exam_date + 'T12:00:00' : study.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
+        : '';
 
     for (const bm of (study.biomarkers ?? [])) {
       const num = parseFloat(String(bm.value).replace(',', '.'));
       if (isNaN(num)) continue;
       const canonical = normalizeBiomarkerName(bm.name);
       if (!map.has(canonical)) map.set(canonical, []);
-      map.get(canonical)!.push({ date: dateLabel, value: num, unit: bm.unit ?? '', flag: bm.flag ?? 'Normal' });
+      map.get(canonical)!.push({ date: dateLabel, isoDate: rawDate ?? '', value: num, unit: bm.unit ?? '', flag: bm.flag ?? 'Normal' });
     }
   }
 
@@ -416,7 +418,7 @@ async function buildEvolutionCharts(studies: any[]): Promise<(Paragraph | Table)
     for (const [name, pts] of pair) {
       const lastFlag = pts[pts.length - 1]?.flag ?? 'Normal';
       const lineHex = lastFlag === 'Alto' ? 'ef4444' : lastFlag === 'Bajo' ? '3b82f6' : '22c55e';
-      const sortedPts = [...pts].sort((a, b) => a.date.localeCompare(b.date));
+      const sortedPts = [...pts].sort((a, b) => a.isoDate.localeCompare(b.isoDate));
       const hasAlt = pts.some(p => p.flag !== 'Normal');
 
       // Per-point colors based on flag
@@ -506,7 +508,7 @@ export async function generateWordReport(
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
   const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
   // Add module 6 if comparative groups were passed from localStorage
-  if (m6Groups.length > 0 || m6Markers.length > 0) approvedNums.push(6);
+  if (m6Groups.length > 0) approvedNums.push(6);
 
   const children: (Paragraph | Table)[] = [
     ...buildCover(patient, approvedNums, dateStr),
