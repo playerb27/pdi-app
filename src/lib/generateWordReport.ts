@@ -79,14 +79,78 @@ function divider(color = C.gray200): Paragraph {
   });
 }
 
-// ─── Markdown → Word paragraphs ────────────────────────────────────────────────
-function mdToParagraphs(text: string): Paragraph[] {
+// ─── Markdown → Word paragraphs (full feature set) ───────────────────────────
+function mdToParagraphs(text: string): (Paragraph | Table)[] {
   const lines = text.split('\n');
-  const result: Paragraph[] = [];
+  const result: (Paragraph | Table)[] = [];
+  let i = 0;
 
-  for (const raw of lines) {
+  while (i < lines.length) {
+    const raw = lines[i];
     const line = raw.trim();
-    if (!line) { result.push(spacer()); continue; }
+
+    // Empty line
+    if (!line) { result.push(spacer()); i++; continue; }
+
+    // GFM Table: detect header row | separator | body
+    if (line.startsWith('|') && lines[i + 1]?.trim().match(/^\|[-:| ]+\|$/)) {
+      const parseRow = (r: string) => r.trim().slice(1, -1).split('|').map(c => c.trim());
+      const headers = parseRow(line);
+      i += 2; // skip header + separator
+      const dataRows: string[][] = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        dataRows.push(parseRow(lines[i]));
+        i++;
+      }
+      // Build table
+      const colWidth = Math.floor(100 / Math.max(headers.length, 1));
+      const headerRow = new TableRow({
+        tableHeader: true,
+        children: headers.map(h => new TableCell({
+          width: { size: colWidth, type: WidthType.PERCENTAGE },
+          shading: shading('1E293B'),
+          borders: noBorder(),
+          margins: { top: 80, bottom: 80, left: 120, right: 120 },
+          children: [new Paragraph({ children: [run(h, { size: 18, bold: true, color: '94A3B8' })], spacing: { before: 0, after: 0 } })],
+        })),
+      });
+      const bodyRows = dataRows.map((cells, ri) => new TableRow({
+        children: cells.map(c => new TableCell({
+          width: { size: colWidth, type: WidthType.PERCENTAGE },
+          shading: shading(ri % 2 === 0 ? 'F8FAFC' : 'FFFFFF'),
+          borders: { ...noBorder(), bottom: { style: BorderStyle.SINGLE, size: 2, color: 'E2E8F0' } },
+          margins: { top: 60, bottom: 60, left: 120, right: 120 },
+          children: [new Paragraph({ children: parseBoldInline(c, 20), spacing: { before: 0, after: 0 } })],
+        })),
+      }));
+      result.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: colorBorder('E2E8F0', 4),
+        rows: [headerRow, ...bodyRows],
+      }));
+      result.push(spacer());
+      continue;
+    }
+
+    // Blockquote callout (> text)
+    if (line.startsWith('> ')) {
+      const content = line.slice(2);
+      result.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        borders: { ...noBorder(), left: { style: BorderStyle.SINGLE, size: 12, color: C.gold } },
+        rows: [new TableRow({
+          children: [new TableCell({
+            shading: shading('FFFBEB'),
+            margins: { top: 80, bottom: 80, left: 200, right: 200 },
+            children: [new Paragraph({ children: parseBoldInline(content, 20), spacing: { before: 0, after: 0 } })],
+          })],
+        })],
+      }));
+      i++; continue;
+    }
+
+    // Horizontal rule
+    if (line === '---') { result.push(divider(C.gray200)); i++; continue; }
 
     // ## H2
     if (line.startsWith('## ')) {
@@ -97,21 +161,31 @@ function mdToParagraphs(text: string): Paragraph[] {
         border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: C.gray200 } },
         keepNext: true,
       }));
-      continue;
+      i++; continue;
     }
 
     // ### H3
     if (line.startsWith('### ')) {
       result.push(new Paragraph({
-        children: [run(line.slice(4), { bold: true, size: 26, color: C.gray700 })],
+        children: [run(line.slice(4), { bold: true, size: 26, color: C.blue })],
         heading: HeadingLevel.HEADING_3,
         spacing: { before: 240, after: 80 },
         keepNext: true,
       }));
-      continue;
+      i++; continue;
     }
 
-    // bullet
+    // #### H4
+    if (line.startsWith('#### ')) {
+      result.push(new Paragraph({
+        children: [run(line.slice(5), { bold: true, size: 22, color: C.gray700 })],
+        spacing: { before: 160, after: 60 },
+        keepNext: true,
+      }));
+      i++; continue;
+    }
+
+    // Bullet
     if (line.startsWith('- ') || line.startsWith('• ')) {
       const content = line.slice(2);
       result.push(new Paragraph({
@@ -120,23 +194,35 @@ function mdToParagraphs(text: string): Paragraph[] {
         spacing: { before: 40, after: 40 },
         indent: { left: convertInchesToTwip(0.25) },
       }));
-      continue;
+      i++; continue;
     }
 
-    // plain
+    // Plain paragraph
     result.push(new Paragraph({
       children: parseBoldInline(line, 22),
       spacing: { before: 0, after: 80 },
     }));
+    i++;
   }
   return result;
 }
 
 function parseBoldInline(text: string, size: number): TextRun[] {
+  // Replace trend arrows with colored variants before splitting
+  text = text
+    .replace(/↗/g, '↑')
+    .replace(/↘/g, '↓')
+    .replace(/⇿/g, '~')
+    .replace(/↔/g, '=')
+    .replace(/🔴/g, '[ALTO]')
+    .replace(/🟡/g, '[MODERADO]')
+    .replace(/🟢/g, '[BAJO/OK]');
+
+  // Split on **bold** spans first
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map(p => {
-    if (p.startsWith('**') && p.endsWith('**')) return run(p.slice(2, -2), { bold: true, size });
-    return run(p, { size });
+  return parts.flatMap(p => {
+    if (p.startsWith('**') && p.endsWith('**')) return [run(p.slice(2, -2), { bold: true, size })];
+    return [run(p, { size })];
   });
 }
 

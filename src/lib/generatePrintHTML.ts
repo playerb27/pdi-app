@@ -104,18 +104,75 @@ export function buildSeriesForPrint(
 }
 
 // Markdown → print HTML (no CSS variables, fully static colors)
+// Supports: tables, blockquote callouts, H2-H4, bold, italic, inline code, lists, HR
 function mdToHtml(text: string): string {
-  return text
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, s => `<ul>${s}</ul>`)
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/^(?!<[hul])(.*)/gm, (_, line) => line.trim() ? `<p>${line}</p>` : '')
-    .replace(/🔴/g, '<span class="badge badge-red">🔴</span>')
-    .replace(/🟡/g, '<span class="badge badge-amber">🟡</span>')
-    .replace(/🟢/g, '<span class="badge badge-green">🟢</span>');
+  // 1. GFM Tables — must run BEFORE paragraph wrapping
+  text = text.replace(
+    /^(\|.+\|)\n\|[-:| ]+\|\n((?:\|.+\|\n?)*)/gm,
+    (_, header, body) => {
+      const parseRow = (row: string) => row.trim().slice(1, -1).split('|').map(c => c.trim());
+      const ths = parseRow(header).map(h =>
+        `<th style="padding:7px 12px;text-align:left;font-size:10.5px;font-weight:700;color:#1e293b;background:#f1f5f9;border:1px solid #e2e8f0">${h}</th>`
+      ).join('');
+      const rows = body.trim().split('\n').filter(Boolean).map((r: string) => {
+        const tds = parseRow(r).map(c =>
+          `<td style="padding:6px 12px;font-size:11px;color:#374151;border:1px solid #e2e8f0">${c}</td>`
+        ).join('');
+        return `<tr>${tds}</tr>`;
+      }).join('');
+      return `<div style="overflow-x:auto;margin:12px 0"><table style="width:100%;border-collapse:collapse;font-family:'Inter',sans-serif">
+        <thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+  );
+
+  // 2. Blockquote callouts (> text)
+  text = text.replace(
+    /^(> .+(?:\n> .+)*)/gm,
+    match => {
+      const content = match.replace(/^> /gm, '');
+      return `<div style="margin:10px 0;padding:10px 16px;border-left:4px solid #b8922a;background:#fffbeb;border-radius:0 6px 6px 0;font-size:12px;color:#78350f;line-height:1.6">${content}</div>`;
+    }
+  );
+
+  // 3. Horizontal rules
+  text = text.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0">');
+
+  // 4. Headings
+  text = text
+    .replace(/^#### (.+)$/gm, '<h4 style="font-size:12px;font-weight:700;color:#374151;margin:14px 0 4px">$1</h4>')
+    .replace(/^### (.+)$/gm, '<h3 style="font-size:14px;font-weight:700;color:#1e40af;margin:18px 0 6px;padding-bottom:3px;border-bottom:1px solid #dbeafe">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 style="font-size:17px;font-weight:800;color:#111827;margin:24px 0 10px;padding-bottom:6px;border-bottom:2px solid #e5e7eb">$1</h2>');
+
+  // 5. Inline formatting
+  text = text
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#111827;font-weight:700">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code style="background:#f3f4f6;padding:1px 5px;border-radius:3px;font-size:11px;font-family:monospace">$1</code>');
+
+  // 6. Lists
+  text = text
+    .replace(/^- (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;color:#374151">$1</li>')
+    .replace(/(<li[^>]*>.*<\/li>\n?)+/g, s => `<ul style="padding-left:20px;margin:8px 0">${s}</ul>`);
+
+  // 7. Status badges
+  text = text
+    .replace(/🔴/g, '<span style="color:#dc2626;font-size:11px">🔴</span>')
+    .replace(/🟡/g, '<span style="color:#b45309;font-size:11px">🟡</span>')
+    .replace(/🟢/g, '<span style="color:#15803d;font-size:11px">🟢</span>')
+    .replace(/⚡/g, '<span style="color:#b45309">⚡</span>')
+    .replace(/✅/g, '<span style="color:#15803d">✅</span>')
+    .replace(/⚠️/g, '<span style="color:#b45309">⚠️</span>')
+    .replace(/↗/g, '<span style="color:#dc2626">↗</span>')
+    .replace(/↘/g, '<span style="color:#15803d">↘</span>')
+    .replace(/⇿/g, '<span style="color:#b45309">⇿</span>')
+    .replace(/↔/g, '<span style="color:#6b7280">↔</span>');
+
+  // 8. Paragraphs — only wrap lines that aren't already block elements
+  text = text.replace(/\n\n/g, '\n__PARABREAK__\n');
+  text = text.replace(/^(?!<[hud]|__PARABREAK__)(.+)$/gm, (_, line) => line.trim() ? `<p style="margin:6px 0;color:#374151;line-height:1.7">${line}</p>` : '');
+  text = text.replace(/__PARABREAK__/g, '<br/>');
+
+  return text;
 }
 
 // Maps system names to safe fallback emojis
