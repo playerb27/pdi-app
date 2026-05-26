@@ -434,24 +434,39 @@ function buildPrompt(
   }
 
   // Convert M2 JSON to readable clinical summary for use in M3/M4/M5 context
+  // Full extraction — includes heroBiomarkers AND otherBiomarkers for complete picture
   function extractM2Summary(m2Content: string): string {
     if (!m2Content) return '';
     try {
       const match = m2Content.match(/```json\s*([\s\S]*?)\s*```/) ?? m2Content.match(/(\{[\s\S]*\})/);
-      if (!match) return m2Content.slice(0, 2000); // fallback: truncate raw text
+      if (!match) return m2Content.slice(0, 4000);
       const d = JSON.parse(match[1]);
-      if (!d.systems) return m2Content.slice(0, 2000);
-      const lines: string[] = [`Índice global de salud: ${d.overallScore ?? 'N/D'}%`];
+      if (!d.systems) return m2Content.slice(0, 4000);
+      const lines: string[] = [
+        `Índice global de salud: ${d.overallScore ?? 'N/D'}% | ${d.studyCount ?? '?'} estudios | rango: ${d.dateRange ?? 'N/D'}`,
+      ];
       d.systems.forEach((s: any) => {
         lines.push(`\n[${s.alertLevel.toUpperCase()}] ${s.name} (vitalidad: ${s.vitalityScore}%)`);
+        // Hero biomarkers with full trend direction
         s.heroBiomarkers?.forEach((b: any) => {
-          lines.push(`  • ${b.name}: ${b.value} ${b.unit} → ${b.flag}${b.trendDir ? ` [${b.trendDir}]` : ''}`);
+          const trend = b.trendDir ? ` [${b.trendDir}]` : '';
+          const trendPoints = b.trend?.length > 0
+            ? ` — historial: ${b.trend.map((t: any) => `${t.date}: ${t.value}`).join(' → ')}`
+            : '';
+          lines.push(`  ★ ${b.name}: ${b.value} ${b.unit} → ${b.flag}${trend}${trendPoints}`);
         });
-        if (s.clinicalInterpretation) lines.push(`  → ${s.clinicalInterpretation}`);
-        if (s.keyAlert) lines.push(`  ⚡ ${s.keyAlert}`);
+        // Other biomarkers (not heroes but still reported)
+        if (s.otherBiomarkers?.length > 0) {
+          lines.push(`  Otros marcadores:`);
+          s.otherBiomarkers.forEach((b: any) => {
+            lines.push(`    • ${b.name}: ${b.value} ${b.unit} → ${b.flag}`);
+          });
+        }
+        if (s.clinicalInterpretation) lines.push(`  → Interpretación: ${s.clinicalInterpretation}`);
+        if (s.keyAlert) lines.push(`  ⚡ ALERTA: ${s.keyAlert}`);
       });
       return lines.join('\n');
-    } catch { return m2Content.slice(0, 2000); }
+    } catch { return m2Content.slice(0, 4000); }
   }
 
   const style = `
@@ -679,80 +694,143 @@ Sé analítico y preciso. Máximo 5 líneas por sección.`;
 
 
     case 4: return `${style}
-Eres el médico diagnosticador del PDI (Protocolo de Diagnóstico Integral) con experiencia en medicina interna, endocrinología y medicina funcional.
+Eres el médico diagnosticador senior del PDI (Protocolo de Diagnóstico Integral) — especialista en medicina interna, endocrinología y medicina funcional integrativa.
 
 Genera el **MÓDULO 4 — DIAGNÓSTICOS POSIBLES Y CORRELACIONES SISTÉMICAS** del reporte médico.
-Este es el módulo más importante. Haz medicina real: razona, correlaciona, diagnostica.
+Este es el módulo más importante del reporte. Tienes acceso al expediente clínico COMPLETO del paciente. Tu trabajo es hacer medicina real: razonar con toda la evidencia disponible, cruzar síntomas con laboratorio, identificar patrones multisistémicos, y emitir diagnósticos con probabilidad clínica fundamentada.
+
+⚠️ REGLA CRÍTICA: Tienes ${canonicalTable.studyDates.length} estudios de laboratorio disponibles (${canonicalTable.studyDates.join(', ')}). DEBES considerar la evolución temporal COMPLETA — no solo el estado actual. Un diagnóstico basado en una sola foto es incompleto. La tendencia en el tiempo es evidencia diagnóstica.
 
 ${base}
 
-CONTEXTO CLÍNICO APROBADO POR EL MÉDICO:
-${approvedModules[1] ? `=== PERFIL DEL PACIENTE ===\n${truncate(approvedModules[1], 2000)}\n` : ''}
-${approvedModules[2] ? `=== ANÁLISIS DE LABORATORIO ===\n${extractM2Summary(approvedModules[2])}\n` : ''}
-${approvedModules[3] ? `=== EVALUACIÓN CLÍNICA ===\n${truncate(approvedModules[3], 3000)}\n` : ''}
+════════════════════════════════════════════════════════
+HISTORIAL COMPLETO DE LABORATORIO — ${canonicalTable.studyDates.length} ESTUDIOS
+(Todos los biomarcadores con su evolución cronológica completa)
+════════════════════════════════════════════════════════
+${clinicalHistoryText}
 
-BIOMARCADORES ALTERADOS (estudio más reciente):
+BIOMARCADORES ALTERADOS EN EL ESTUDIO MÁS RECIENTE (${canonicalTable.latestDate}):
 ${alteredBiomarkersText}
 
+════════════════════════════════════════════════════════
+ANÁLISIS DE LABORATORIO POR SISTEMAS (Módulo 2 — aprobado por el médico)
+════════════════════════════════════════════════════════
+${approvedModules[2] ? extractM2Summary(approvedModules[2]) : '(no disponible)'}
+
+════════════════════════════════════════════════════════
+EVALUACIÓN CLÍNICA SISTÉMICA (Módulo 3 — aprobado por el médico)
+════════════════════════════════════════════════════════
+${approvedModules[3] ? truncate(approvedModules[3], 6000) : '(no disponible)'}
+
+════════════════════════════════════════════════════════
+PERFIL INTEGRAL DEL PACIENTE (Módulo 1 — historia clínica)
+════════════════════════════════════════════════════════
+${approvedModules[1] ? truncate(approvedModules[1], 4000) : '(no disponible)'}
+
+════════════════════════════════════════════════════════
+ENTREVISTA CLÍNICA — VOZ DEL PACIENTE (fuente primaria)
+════════════════════════════════════════════════════════
+${interviewText}
+${differentialText}
+${doctorNotesText ? `
+════════════════════════════════════════════════════════
+OBSERVACIONES DIRECTAS DEL MÉDICO (prioridad máxima)
+════════════════════════════════════════════════════════
+${doctorNotesText}` : ''}
+
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
+
 ## 1. Diagnósticos Primarios (alta probabilidad)
-Para cada diagnóstico:
+Para cada diagnóstico, integra evidencia de laboratorio (con valores y fechas exactas), síntomas clínicos, y tendencia temporal:
 ### [Número]. [Nombre del diagnóstico]
-- **Evidencia de laboratorio**: (citar valores específicos)
-- **Evidencia clínica**: (citar síntomas reportados, sin códigos de pregunta)
-- **Probabilidad estimada**: Alta / Moderada
-- **Criterios diagnósticos cumplidos**: (si aplica)
+- **Evidencia de laboratorio**: cita los valores con fechas (usa el historial completo, no solo el último)
+- **Evolución temporal**: ¿el cuadro está empeorando, mejorando o fluctuando? ¿Desde cuándo?
+- **Evidencia clínica**: síntomas reportados que sustentan este diagnóstico (sin códigos de pregunta)
+- **Probabilidad estimada**: Alta / Moderada + justificación en 1 línea
+- **Criterios diagnósticos cumplidos**: (si aplica, menciona criterios formales)
 
 ## 2. Diagnósticos Diferenciales (a descartar)
-Lista con evidencia a favor y en contra de cada uno.
+Para cada diferencial: evidencia a favor, evidencia en contra, y qué estudio o dato lo descartaría.
 
 ## 3. Patrones Multisistémicos Identificados
-Correlaciones entre sistemas: ¿qué condición explica múltiples hallazgos?
+¿Qué condición única podría explicar múltiples hallazgos de distintos sistemas? Conecta laboratorio + síntomas + evolución. Sé específico — cita los biomarcadores y síntomas que se correlacionan.
 
-## 4. Hallazgos que Requieren Atención Urgente
-Solo si hay valores críticos o síntomas de alarma.
+## 4. Hallazgos que Requieren Atención Urgente o Seguimiento Inmediato
+Solo si hay valores críticos, tendencias alarmantes, o síntomas de alarma que no se deben diferir. Prioriza por urgencia.
 
-## 5. Factores de Riesgo Cardiovascular / Metabólico / Oncológico
-Cuantificados con la evidencia disponible.
+## 5. Factores de Riesgo Acumulado
+### Riesgo Cardiovascular
+### Riesgo Metabólico / Síndrome Metabólico
+### Riesgo Oncológico (si aplica)
+Cuantifica cada uno con la evidencia disponible. Menciona marcadores que apoyan y los que son protectores.
 
-Sé valiente clínicamente. Un médico experto hace diagnósticos, no se esconde en generalidades.`;
+## 6. Brechas Diagnósticas — Lo que falta para completar el cuadro
+Estudios, marcadores o datos clínicos que cambiarían o precisarían el diagnóstico si estuvieran disponibles.
+
+Sé valiente clínicamente. Un médico experto emite diagnósticos con la evidencia disponible — no se esconde en generalidades ni en "se requieren más estudios" como respuesta evasiva.`;
 
     case 5: return `${style}
-Eres el médico de intervención del PDI (Protocolo de Diagnóstico Integral).
+Eres el médico de intervención del PDI (Protocolo de Diagnóstico Integral) — especialista en medicina funcional, preventiva y de precisión.
 
 Genera el **MÓDULO 5 — PLAN DE INTERVENCIÓN INTEGRAL** del reporte médico.
+Este plan debe ser específico para ESTE paciente, no genérico. Cada recomendación debe tener evidencia directa del caso.
 
 ${base}
 
-DIAGNÓSTICO Y CONTEXTO CLÍNICO:
-${approvedModules[4] ? approvedModules[4] : 'Ver módulos anteriores.'}
+════════════════════════════════════════════════════════
+DIAGNÓSTICOS Y ANÁLISIS CLÍNICO (Módulo 4 — base del plan)
+════════════════════════════════════════════════════════
+${approvedModules[4] ? truncate(approvedModules[4], 6000) : 'Ver módulos anteriores.'}
 
-TABLA CANÓNICA DE LABORATORIO:
-${labTableText}
+════════════════════════════════════════════════════════
+HISTORIAL COMPLETO DE LABORATORIO — ${canonicalTable.studyDates.length} ESTUDIOS
+════════════════════════════════════════════════════════
+${clinicalHistoryText}
+
+BIOMARCADORES ALTERADOS EN EL ESTUDIO ACTUAL (${canonicalTable.latestDate}):
+${alteredBiomarkersText}
+
+════════════════════════════════════════════════════════
+ENTREVISTA CLÍNICA — ESTILO DE VIDA Y CONTEXTO DEL PACIENTE
+════════════════════════════════════════════════════════
+${interviewText}
+${doctorNotesText ? `
+NOTAS DEL MÉDICO:
+${doctorNotesText}` : ''}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
-## 1. Prioridades de Intervención Inmediata (0-4 semanas)
-Acciones urgentes con justificación.
 
-## 2. Plan Farmacológico / Suplementación
-Para cada diagnóstico: opciones de tratamiento con dosis orientativas.
+## 1. Prioridades de Intervención Inmediata (0–4 semanas)
+Acciones urgentes ordenadas por impacto. Para cada una: qué hacer, por qué es urgente, y qué biomarcador o síntoma lo justifica.
 
-## 3. Intervenciones de Estilo de Vida por Sistema
+## 2. Plan Farmacológico y de Suplementación
+Por diagnóstico o sistema afectado:
+- **Opción farmacológica**: nombre, dosis orientativa, duración estimada, objetivo de laboratorio
+- **Suplementación funcional**: nombre, dosis, forma (oral/sublingual/etc.), por qué este paciente en particular
+- **Interacciones o precauciones**: si el paciente ya toma algo, mencionar
+
+## 3. Intervenciones de Estilo de Vida Personalizadas
+Adaptadas al perfil de este paciente (ocupación, hábitos actuales, barreras reportadas):
 ### Nutrición y Alimentación
 ### Actividad Física
 ### Gestión del Sueño
-### Manejo del Estrés
+### Manejo del Estrés y Salud Mental
 
 ## 4. Estudios Adicionales Recomendados
-Lista priorizada de estudios faltantes que completarían el diagnóstico.
+Lista priorizada: qué pedir, por qué, y qué diagnóstico confirmaría o descartaría cada uno.
 
 ## 5. Metas de Laboratorio a 3 y 6 meses
-Para cada biomarcador alterado: meta numérica y cómo alcanzarla.
+Para cada biomarcador alterado o en riesgo:
+| Biomarcador | Valor actual | Meta a 3 meses | Meta a 6 meses | Estrategia |
+|---|---|---|---|---|
 
 ## 6. Seguimiento y Control
-Frecuencia de visitas, qué monitorear y cuándo escalar.
+- Frecuencia de visitas recomendada
+- Qué biomarcadores priorizar en el siguiente estudio
+- Señales de alarma que requieren atención antes del próximo control
+- Cuándo escalar a especialista y a qué especialidad
 
-Sé específico y accionable. Cada recomendación debe tener un "por qué" claro.`;
+Sé específico y accionable. Cada recomendación debe tener un "por qué" claro y una referencia al dato del paciente que la justifica.`;
 
     default: return 'Módulo no reconocido.';
   }
@@ -798,7 +876,8 @@ export async function POST(req: Request) {
       model: 'gemini-2.5-flash-lite',
       generationConfig: {
         temperature: 0.4,
-        maxOutputTokens: moduleNum === 1 ? 16000 : moduleNum === 2 ? 16000 : [4, 5].includes(moduleNum) ? 12000 : 8192
+        // M4 and M5 now receive full context — need max tokens to produce thorough output
+        maxOutputTokens: [1, 2, 4, 5].includes(moduleNum) ? 16000 : 8192
       }
     });
 
