@@ -1,19 +1,317 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
+import { ALL_SECTIONS } from '@/lib/questionnaire-data-ext';
+import { normalizeBiomarkerName } from '@/lib/biomarkers';
+import { createClient } from '@supabase/supabase-js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type BiomarkerRow = { name: string; value: string; unit: string; referenceRange?: string; flag: string; system: string };
-type StudySnapshot = { date: string; name: string; biomarkers: BiomarkerRow[] };
+
+// Canonical pivot row — one per normalized biomarker name, across all study dates
+type CanonicalRow = {
+  name: string;           // display name (from catalog or first occurrence)
+  canonical: string;      // normalized key
+  unit: string;
+  refMin: number | null;
+  refMax: number | null;
+  system: string;
+  readings: { date: string; value: string; flag: string }[];  // sorted oldest → newest
+};
+
+type CanonicalTable = {
+  studyDates: string[];   // sorted YYYY-MM-DD strings
+  latestDate: string;     // most recent study date
+  rows: CanonicalRow[];
+  rowsBySystem: Record<string, CanonicalRow[]>;
+};
+
+// ─── Server-side canonical table builder ──────────────────────────────────────
+// Mirrors BiomarkerMasterTable pivot logic — groups by canonical_name,
+// sorts chronologically, respects is_edited priority, excludes 'Excluido'.
+async function buildCanonicalTable(patientId: string): Promise<CanonicalTable | null> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const sb = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  // Fetch studies with full biomarker data (same fields as BiomarkerMasterTable uses)
+  const { data: studies, error } = await sb
+    .from('studies')
+    .select('id, file_name, exam_date, created_at, biomarkers(id, name, raw_name, canonical_name, canonical_system, value, unit, reference_range, flag, is_edited)')
+    .eq('patient_id', patientId)
+    .order('exam_date', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true });
+
+  if (error || !studies || studies.length === 0) return null;
+
+  // Resolve study date — same logic as BiomarkerMasterTable / getStudyDate()
+  const getStudyDate = (s: any): string => {
+    if (s.exam_date) return s.exam_date.slice(0, 10);
+    const fileDate = s.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
+    return fileDate ?? s.created_at?.slice(0, 10) ?? '1970-01-01';
+  };
+
+  // Sort studies chronologically
+  const sortedStudies = [...studies].sort((a, b) => {
+    return getStudyDate(a) < getStudyDate(b) ? -1 : 1;
+  });
+
+  // Unique dates (one column per study date)
+  const seenDates = new Set<string>();
+  const studyDates: string[] = [];
+  for (const s of sortedStudies) {
+    const d = getStudyDate(s);
+    if (!seenDates.has(d)) { seenDates.add(d); studyDates.push(d); }
+  }
+
+  // Pivot: group by canonical name
+  type Cell = { value: string; flag: string; isEdited: boolean };
+  const byCanonical: Map<string, {
+    displayName: string;
+    unit: string;
+    system: string;
+    cells: Record<string, Cell>; // date → cell
+  }> = new Map();
+
+  for (const study of sortedStudies) {
+    const dateKey = getStudyDate(study);
+    for (const bm of (study.biomarkers ?? [])) {
+      if (bm.flag === 'Excluido') continue;
+      const rawStr = String(bm.value ?? '').trim();
+      if (!rawStr) continue;
+
+      // Use canonical_name from DB if available; otherwise normalize on the fly
+      const canonical = (bm.canonical_name
+        ? bm.canonical_name.toLowerCase()
+        : normalizeBiomarkerName(bm.raw_name ?? bm.name).toLowerCase()
+      );
+
+      const displayName = bm.canonical_name ?? normalizeBiomarkerName(bm.raw_name ?? bm.name);
+      const system = bm.canonical_system ?? 'Otros Marcadores';
+
+      if (!byCanonical.has(canonical)) {
+        byCanonical.set(canonical, { displayName, unit: bm.unit ?? '', system, cells: {} });
+      }
+      const entry = byCanonical.get(canonical)!;
+
+      // is_edited wins over non-edited for same date (mirrors BiomarkerMasterTable logic)
+      const existing = entry.cells[dateKey];
+      const incoming: Cell = { value: rawStr, flag: bm.flag ?? 'Normal', isEdited: !!(bm as any).is_edited };
+      if (!existing || (incoming.isEdited && !existing.isEdited)) {
+        entry.cells[dateKey] = incoming;
+      }
+    }
+  }
+
+  // Build canonical rows with ordered readings
+  const rows: CanonicalRow[] = [];
+  byCanonical.forEach((entry, canonical) => {
+    const readings = studyDates
+      .filter(d => entry.cells[d])
+      .map(d => ({
+        date: d,
+        value: entry.cells[d].value,
+        flag: entry.cells[d].flag,
+      }));
+    if (readings.length === 0) return;
+    rows.push({
+      name: entry.displayName,
+      canonical,
+      unit: entry.unit,
+      refMin: null,  // not critical for AI context
+      refMax: null,
+      system: entry.system,
+      readings,
+    });
+  });
+
+  // Group by system
+  const rowsBySystem: Record<string, CanonicalRow[]> = {};
+  for (const row of rows) {
+    if (!rowsBySystem[row.system]) rowsBySystem[row.system] = [];
+    rowsBySystem[row.system].push(row);
+  }
+
+  return {
+    studyDates,
+    latestDate: studyDates[studyDates.length - 1] ?? '',
+    rows,
+    rowsBySystem,
+  };
+}
+
+// ─── Canonical table → AI prompt text ───────────────────────────────────────
+function canonicalTableToText(table: CanonicalTable): string {
+  const fmt = (d: string) => {
+    // "2026-04-27" → "27-abr-26"
+    const months = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    const [y, m, day] = d.split('-');
+    return `${day}-${months[parseInt(m) - 1]}-${y.slice(2)}`;
+  };
+
+  const lines: string[] = [
+    `TABLA DE LABORATORIO — ${table.studyDates.length} estudios (${fmt(table.studyDates[0])} → ${fmt(table.latestDate)})`,
+    `ESTUDIO MÁS RECIENTE: ${table.latestDate} (columna más a la derecha = estado ACTUAL)`,
+    '',
+  ];
+
+  for (const [system, rows] of Object.entries(table.rowsBySystem)) {
+    lines.push(`─── ${system.toUpperCase()} ${'─'.repeat(Math.max(0, 50 - system.length))}`);
+    for (const row of rows) {
+      const header = `${row.name} (${row.unit})`;
+      const cells = row.readings.map(r => `${fmt(r.date)}: ${r.value}${r.flag !== 'Normal' ? '⚠' : '✓'}`);
+      lines.push(`  ${header}`);
+      lines.push(`    ${cells.join('  |  ')}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// ─── Latest study summary → "current values" for the AI ─────────────────────
+function latestStudySummary(table: CanonicalTable): { total: number; altered: number; text: string } {
+  const current = table.rows
+    .map(r => {
+      const last = r.readings[r.readings.length - 1];
+      return last ? { name: r.name, unit: r.unit, ...last } : null;
+    })
+    .filter(Boolean) as { name: string; unit: string; date: string; value: string; flag: string }[];
+
+  const altered = current.filter(c => c.flag !== 'Normal');
+  const text = current
+    .map(c => `• ${c.name}: ${c.value} ${c.unit} → ${c.flag === 'Normal' ? '✓ Normal' : `⚠ ${c.flag}`}`)
+    .join('\n');
+
+  return { total: current.length, altered: altered.length, text };
+}
+
+// ─── Clinical history text for modules 3/4/5 ─────────────────────────────────
+// Vertical format — one block per biomarker, ALL historical values listed.
+// Much clearer than a horizontal pivot table for the AI to read correctly.
+function buildClinicalHistoryText(table: CanonicalTable): string {
+  const lines: string[] = [
+    `═══ HISTORIAL CLÍNICO COMPLETO — ${table.studyDates.length} estudios ═══`,
+    `Fechas analizadas: ${table.studyDates.join(' | ')}`,
+    `ESTUDIO ACTUAL (más reciente): ${table.latestDate}`,
+    '',
+  ];
+
+  for (const [system, rows] of Object.entries(table.rowsBySystem)) {
+    lines.push(`▶ ${system.toUpperCase()}`);
+    for (const row of rows) {
+      if (row.readings.length === 0) continue;
+      const last = row.readings[row.readings.length - 1];
+      const isActual = (r: { date: string }) => r.date === table.latestDate;
+
+      // Trend direction based on flag history
+      let trendTag = '';
+      if (row.readings.length > 1) {
+        const firstFlag = row.readings[0].flag;
+        const lastFlag = last.flag;
+        const anyAltered = row.readings.some(r => r.flag !== 'Normal');
+        trendTag = !anyAltered ? ' [↔ siempre normal]'
+          : lastFlag === 'Normal' && firstFlag !== 'Normal' ? ' [↘ MEJORÓ]'
+          : lastFlag !== 'Normal' && firstFlag === 'Normal' ? ' [↗ EMPEORÓ]'
+          : ' [⇿ fluctuante]';
+      }
+
+      lines.push(`  ${row.name} (${row.unit})${trendTag}`);
+      for (const r of row.readings) {
+        const marker = isActual(r) ? ' ◄ ACTUAL' : '';
+        const flag = r.flag !== 'Normal' ? ` ⚠ ${r.flag}` : ' ✓';
+        lines.push(`    ${r.date}: ${r.value}${flag}${marker}`);
+      }
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// ─── Module 2 post-processor ─────────────────────────────────────────────────
+// The AI cannot be trusted to pick the right numeric value from a text table.
+// After the AI generates the JSON, we overwrite every heroBiomarker's value,
+// flag, and trend array with ground-truth data straight from canonicalTable.
+function fixModule2Json(raw: string, table: CanonicalTable): string {
+  try {
+    // Strip markdown code fences if present
+    const jsonStr = raw.replace(/^```json\s*/m, '').replace(/\s*```$/m, '').trim();
+    const data = JSON.parse(jsonStr);
+    if (!data.systems) return raw;
+
+    // Index canonical rows by every possible name variant for fast lookup
+    const byKey = new Map<string, CanonicalRow>();
+    for (const row of table.rows) {
+      byKey.set(row.canonical.toLowerCase(), row);
+      byKey.set(row.name.toLowerCase(), row);
+    }
+
+    const findRow = (aiName: string): CanonicalRow | undefined => {
+      const key = aiName.toLowerCase().trim();
+      if (byKey.has(key)) return byKey.get(key);
+      // Partial match — find the canonical row whose name is contained in the AI name or vice-versa
+      for (const [k, row] of byKey) {
+        if (key.includes(k) || k.includes(key)) return row;
+      }
+      return undefined;
+    };
+
+    for (const system of data.systems) {
+      for (const hero of (system.heroBiomarkers ?? [])) {
+        const row = findRow(hero.name ?? '');
+        if (!row || row.readings.length === 0) continue;
+        const last = row.readings[row.readings.length - 1];
+        // Override value and flag with DB ground truth
+        hero.value = isNaN(Number(last.value)) ? last.value : Number(last.value);
+        hero.flag = last.flag;
+        // Override trend with ALL readings from DB
+        hero.trend = row.readings.map(r => ({
+          date: r.date.slice(0, 7),   // YYYY-MM
+          value: isNaN(Number(r.value)) ? r.value : Number(r.value),
+        }));
+        // Recalculate trendDir from actual readings
+        if (row.readings.length > 1) {
+          const first = row.readings[0].flag;
+          const lastF = last.flag;
+          const anyAltered = row.readings.some(r => r.flag !== 'Normal');
+          hero.trendDir = !anyAltered ? 'estable'
+            : lastF === 'Normal' && first !== 'Normal' ? 'mejorando'
+            : lastF !== 'Normal' && first === 'Normal' ? 'empeorando'
+            : 'fluctuante';
+        }
+      }
+      // Fix otherBiomarkers too
+      for (const other of (system.otherBiomarkers ?? [])) {
+        const row = findRow(other.name ?? '');
+        if (!row || row.readings.length === 0) continue;
+        const last = row.readings[row.readings.length - 1];
+        other.value = last.value;
+        other.flag = last.flag;
+      }
+    }
+
+    // Fix top-level dateRange and studyCount
+    data.studyCount = table.studyDates.length;
+    if (table.studyDates.length > 0) {
+      data.dateRange = `${table.studyDates[0].slice(0,7)} a ${table.latestDate.slice(0,7)}`;
+    }
+
+    return JSON.stringify(data);
+  } catch {
+    return raw; // If anything fails, return original
+  }
+}
 
 // ─── Prompt builders per module ───────────────────────────────────────────────
 
 function buildPrompt(
   moduleNum: number,
   patient: { full_name: string; birth_date: string; gender: string; status: string },
-  biomarkers: BiomarkerRow[],
-  allStudies: StudySnapshot[],
+  canonicalTable: CanonicalTable,
   interviewAnswers: Record<string, string>,
   approvedModules: Record<number, string>
 ): string {
@@ -29,53 +327,14 @@ function buildPrompt(
     return `${years} años y ${months} meses`;
   })();
 
-  const alteredBiomarkers = biomarkers.filter(b => b.flag !== 'Normal');
-  const biomarkersText = biomarkers.map(b =>
-    `• ${b.name}: ${b.value} ${b.unit} [Ref: ${b.referenceRange ?? 'N/D'}] → ${b.flag}`
-  ).join('\n');
+  const labTableText = canonicalTableToText(canonicalTable);
+  const clinicalHistoryText = buildClinicalHistoryText(canonicalTable);
 
-  // Build longitudinal view: each study is treated as a SEPARATE snapshot regardless of upload date.
-  // We use the file name as the identifier (it contains the clinical date like "2026-04-27a.pdf").
-  function buildLongitudinalView(): string {
-    const studies = allStudies.filter(s => s.biomarkers && s.biomarkers.length > 0);
-    if (studies.length <= 1) return biomarkersText;
-
-    // Group by biomarker name across all studies
-    const byName: Record<string, { label: string; value: string; unit: string; flag: string }[]> = {};
-    studies.forEach(study => {
-      // Use file name (stripped of extension) as the label — it has the clinical date
-      const label = study.name.replace(/\.[^.]+$/, '').slice(0, 20);
-      study.biomarkers.forEach((b: BiomarkerRow) => {
-        if (!byName[b.name]) byName[b.name] = [];
-        byName[b.name].push({ label, value: b.value, unit: b.unit, flag: b.flag });
-      });
-    });
-
-    const lines: string[] = [
-      `HISTORIAL COMPARATIVO (${studies.length} estudios: ${studies.map(s => s.name.replace(/\.[^.]+$/, '')).join(', ')})\n`,
-    ];
-    Object.entries(byName).forEach(([name, readings]) => {
-      const unit = readings[0]?.unit ?? '';
-      if (readings.length === 1) {
-        const r = readings[0];
-        lines.push(`• ${name}: ${r.value} ${unit} → ${r.flag}`);
-      } else {
-        const hasAlert = readings.some(r => r.flag !== 'Normal');
-        const lastFlag = readings.at(-1)!.flag;
-        const firstFlag = readings[0].flag;
-        const trendDir = !hasAlert ? '✓ estable'
-          : lastFlag !== 'Normal' && firstFlag === 'Normal' ? '↗ empeorando'
-          : lastFlag === 'Normal' && firstFlag !== 'Normal' ? '↘ mejorando'
-          : '↔ fluctuante';
-        const trend = readings.map(r => `[${r.label}]: ${r.value}${r.flag !== 'Normal' ? '⚠' : ''}`).join(' → ');
-        lines.push(`• ${name} [${trendDir}]: ${trend} ${unit}`);
-      }
-    });
-    return lines.join('\n');
-  }
-
-  const historialText = buildLongitudinalView();
-
+  const latest = latestStudySummary(canonicalTable);
+  const alteredBiomarkersText = canonicalTable.rows
+    .map(r => { const l = r.readings[r.readings.length - 1]; return l && l.flag !== 'Normal' ? `• ${r.name}: ${l.value} ${r.unit} → ${l.flag}` : null; })
+    .filter(Boolean)
+    .join('\n') || '• Ninguno alterado en el estudio más reciente.';
 
   // Separate doctor notes (notes_s1..s14) from patient answers
   const doctorNotesEntries = Object.entries(interviewAnswers)
@@ -88,13 +347,43 @@ function buildPrompt(
       }).join('\n')
     : '';
 
-  // Clean interview text — remove sXqY IDs, notes keys, and differential questions/answers
-  const baseInterviewEntries = Object.entries(interviewAnswers)
-    .filter(([k, v]) => !k.startsWith('notes_s') && k !== 'differential_questions' && !k.startsWith('diff_q_') && !k.startsWith('diff_a_') && v && v.trim());
+  // Build a lookup map: questionId → { label, sectionNum, sectionTitle }
+  type QMeta = { label: string; sectionNum: number; sectionTitle: string };
+  const questionMeta: Record<string, QMeta> = {};
+  for (const section of ALL_SECTIONS) {
+    for (const q of section.questions) {
+      if (q.id && q.label) {
+        questionMeta[q.id] = { label: q.label, sectionNum: section.num, sectionTitle: section.title };
+      }
+    }
+  }
 
-  const interviewText = baseInterviewEntries
-    .map(([, v]) => '• ' + v.replace(/\|\|/g, ', '))
-    .join('\n');
+  // Build interview text GROUPED BY SECTION — each section = one clinical domain
+  // Skip: notes keys, differential keys, empty values
+  const filteredEntries = Object.entries(interviewAnswers)
+    .filter(([k, v]) =>
+      !k.startsWith('notes_s') &&
+      k !== 'differential_questions' &&
+      !k.startsWith('diff_q_') &&
+      !k.startsWith('diff_a_') &&
+      v && v.trim()
+    );
+
+  // Group by section
+  const bySection: Record<number, { title: string; lines: string[] }> = {};
+  for (const [k, v] of filteredEntries) {
+    const meta = questionMeta[k];
+    const sNum = meta?.sectionNum ?? 99;
+    const sTitle = meta?.sectionTitle ?? 'Otros datos';
+    const label = meta?.label ?? k;
+    if (!bySection[sNum]) bySection[sNum] = { title: sTitle, lines: [] };
+    bySection[sNum].lines.push(`  • ${label}: ${v.replace(/\|\|/g, ', ')}`);
+  }
+
+  const interviewText = Object.entries(bySection)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, { title, lines }]) => `[${title}]\n${lines.join('\n')}`)
+    .join('\n\n');
 
   // Format differential questions and answers if present
   let differentialText = '';
@@ -158,37 +447,119 @@ INSTRUCCIONES DE ESTILO:
 
   switch (moduleNum) {
 
-    case 1: return `${style}
-Eres el redactor clínico senior del PDI (Protocolo de Diagnóstico Integral).
+    case 1: return `
+Eres el clínico redactor del PDI (Protocolo de Diagnóstico Integral). Tu tarea es construir el MÓDULO 1 — PERFIL INTEGRAL DEL PACIENTE, que sirve como la historia clínica de apertura del reporte médico. Este documento será leído por el médico tratante y debe reflejar con precisión y profundidad quién es este paciente, qué lo trae aquí, y cuál es su contexto clínico completo.
 
-Genera el **MÓDULO 1 — PERFIL INTEGRAL DEL PACIENTE** del reporte médico.
+PACIENTE: ${patient.full_name} | ${age} | ${patient.gender === 'male' ? 'Masculino' : 'Femenino'}
 
-${base}
-
-DATOS DE LA ENTREVISTA CLÍNICA (respuestas del paciente):
+════════════════════════════════════════
+ENTREVISTA CLÍNICA COMPLETA (organizada por sistema)
+════════════════════════════════════════
 ${interviewText}
-${differentialText}
-${doctorNotesText ? `
-OBSERVACIONES CLÍNICAS DEL MÉDICO (notas del exploración física y evaluación clínica directa):
-${doctorNotesText}` : ''}
+${differentialText ? `\n════════════════════════════════════════\nPREGUNTAS DE DIAGNÓSTICO DIFERENCIAL\n════════════════════════════════════════\n${differentialText}` : ''}
+${doctorNotesText ? `\n════════════════════════════════════════\nNOTAS CLÍNICAS DEL MÉDICO (hallazgos directos de la exploración)\n════════════════════════════════════════\n${doctorNotesText}` : ''}
 
-ESTRUCTURA OBLIGATORIA DEL MÓDULO:
+════════════════════════════════════════
+INSTRUCCIONES DE FORMATO Y REDACCIÓN
+════════════════════════════════════════
+
+FORMATO OBLIGATORIO — el renderer del sistema procesa Markdown enriquecido:
+- ## para títulos de sección (h2 con línea inferior)
+- ### para subsecciones de sistema (h3 dorado)
+- **negrita** para valores, hallazgos claves y términos clínicos importantes
+- Tablas Markdown (| Col | Col |) para datos demográficos y medicamentos
+- Líneas > al inicio para callouts de hallazgos claves importantes (se renderizan como cajas doradas)
+- --- para separadores entre secciones cuando mejore la lectura
+- Listas con - solo para elementos enumerables (antecedentes, diagnósticos, medicamentos)
+- El resto: párrafos cortos y densos (máx 4-5 líneas cada uno), NUNCA texto corrido largo
+
+ESTILO: Español médico de alto nivel. Preciso, directo, sin relleno. NUNCA menciones códigos de pregunta (s1q7, etc.). NUNCA disclaimers.
+
+REGLA CRÍTICA: Solo incluye lo que está en la entrevista. Las respuestas negativas clínicamente relevantes ("no fuma", "sin cirugías previas") se mencionan brevemente como contexto protector — no silencio, sino afirmación positiva.
+
+════════════════════════════════════════
+ESTRUCTURA OBLIGATORIA
+════════════════════════════════════════
+
 ## 1. Datos Generales
-## 2. Motivo de Consulta y Expectativas
-## 3. Antecedentes Heredofamiliares de Relevancia Clínica
-## 4. Antecedentes Personales Patológicos
-## 5. Medicamentos y Suplementos Actuales
-## 6. Perfil de Riesgo Familiar Consolidado
-## 7. Impresión Clínica Inicial (integra las observaciones del médico si las hay)
+Genera una tabla Markdown con las columnas | Campo | Valor | para todos los datos disponibles:
+- Nombre completo, Edad exacta, Sexo, Estado civil, Ocupación
+- Si hay: Peso, Talla, IMC (calcula: peso/talla²), Circunferencia de cintura
+- Interpretación del IMC entre paréntesis: <18.5 Bajo peso | 18.5–24.9 Normopeso | 25–29.9 Sobrepeso | ≥30 Obesidad
+- Si hay: Lateralidad, Etnia, Tensión arterial conocida
+Después de la tabla, 1-2 oraciones de contexto ocupacional si aportan relevancia clínica.
 
-Sé exhaustivo con la información disponible. No inventes datos, usa solo lo que está en la entrevista.`;
+---
+
+## 2. Motivo de Consulta y Expectativas
+Párrafo de 3-4 oraciones: motivo principal, última vez que tuvo checkup, autopercepción de salud (escala: 1-3=mala, 4-6=regular, 7-8=buena, 9-10=excelente), metas que desea lograr.
+
+> Si hay síntomas principales que el paciente menciona explícitamente como motivo, destacarlos aquí en este callout.
+
+---
+
+## 3. Antecedentes Heredofamiliares
+Lista con - de las enfermedades familiares reportadas. Si hay cáncer, especifica tipo y parentesco.
+Si no hay antecedentes: "Sin antecedentes heredofamiliares de relevancia reportados."
+
+> Si hay acumulación de riesgo (ej: diabetes + hipertensión + infarto en familia directa), señalarlo como hallazgo de alerta.
+
+---
+
+## 4. Antecedentes Personales Patológicos
+Lista con - los diagnósticos actuales conocidos, hospitalizaciones previas (con causa), cirugías previas (con año), alergias. Solo los que estén presentes en la entrevista.
+
+---
+
+## 5. Medicamentos y Suplementos Actuales
+Tabla Markdown con columnas | Medicamento / Suplemento | Dosis | Frecuencia | si los datos están disponibles. Si no hay ninguno: "Sin medicamentos ni suplementos activos reportados."
+
+---
+
+## 6. Perfil Clínico Multisistémico
+Este es el corazón del módulo. Documenta TODOS los sistemas con datos en la entrevista. Para cada uno:
+
+### ⚡ Sistema Metabólico y Energético
+(peso, composición corporal, energía, sueño, nutrición, actividad física) — 3-5 oraciones. **Negrita** para hallazgos relevantes.
+
+Repite el mismo patrón para:
+### ❤️ Salud Cardiovascular y Circulatoria
+### 🧬 Sistema Endocrino / Hormonal
+(tiroides, glucosa, hormonas sexuales, vitamina D)
+### 🦠 Función Digestiva y Microbiota
+### 🛡️ Sistema Inmune e Inflamación
+(autoinmunidad, alergias, infecciones, historial COVID)
+### 🧠 Salud Neurológica y Cognitiva
+(memoria, concentración, salud mental, cefaleas, neuropatía periférica)
+### 🦷 Salud Dental y Estomatognática
+### 👁️ Salud Visual y Oftalmológica
+### 🧴 Salud Dermatológica e Integumentaria
+### 🫁 Sistema Renal, Respiratorio y Osteomuscular
+### 🔬 Desintoxicación y Estrés Oxidativo
+(alcohol, tabaco, sustancias, exposición a tóxicos)
+### 📌 Motivación, Metas y Disposición para el Cambio
+
+Para cada sistema: 3-5 oraciones que capturen síntomas presentes, hábitos, diagnósticos previos, nivel de función, factores de riesgo y factores protectores. Los sistemas sanos se documentan brevemente en positivo (1-2 oraciones). Usa **negrita** para hallazgos clínicamente relevantes.
+
+> Si hay un hallazgo destacado en un sistema, anótalo en un callout > inmediatamente después del párrafo.
+
+Omite un sistema SOLO si la sección de la entrevista correspondiente está completamente vacía.
+
+---
+
+## 7. Impresión Clínica Inicial
+${doctorNotesText ? 'Integra primero las notas clínicas del médico con la información de la entrevista. ' : ''}Párrafo de 4-6 oraciones: quién es este paciente, su carga de riesgo global, sus fortalezas de salud, y los sistemas que merecen mayor atención diagnóstica. Esta sección sirve como hilo conductor hacia los módulos siguientes.
+
+> Destaca aquí el hallazgo o patrón más relevante de todo el perfil que el médico no debe perder de vista.`;
 
     case 2: return `
 Eres el médico internista del PDI. Genera el MÓDULO 2 — ANÁLISIS DE LABORATORIO POR SISTEMAS.
 
-IMPORTANTE: Responde SOLO con el JSON, sin texto antes ni después. Mántente CONCISO: máximo 3 heroBiomarkers por sistema, patientExplanation máximo 1 oración.
+IMPORTANTE: Responde SOLO con el JSON, sin texto antes ni después. Sé conciso: máximo 3 heroBiomarkers por sistema, patientExplanation máximo 1 oración.
 
-JSON requerido (sé compacto en strings):
+📌 ENFOQUE: Analiza el CASO COMPLETO — no solo el último estudio. Un médico revisa el historial completo, identifica tendencias y da un diagnóstico del estado del paciente en el tiempo. Los scores y la interpretación clínica deben reflejar este panorama completo.
+
+JSON requerido:
 \`\`\`json
 {
   "studyCount": N, "dateRange": "YYYY-MM a YYYY-MM", "overallScore": N,
@@ -202,66 +573,79 @@ JSON requerido (sé compacto en strings):
       "trendDir": "mejorando|empeorando|estable|fluctuante"
     }],
     "otherBiomarkers": [{"name":"str","value":"str","unit":"str","flag":"str"}],
-    "clinicalInterpretation": "2 oraciones técnicas",
+    "clinicalInterpretation": "2 oraciones técnicas considerando la historia completa del paciente",
     "keyAlert": "str_o_null"
   }]
 }
 \`\`\`
 
 REGLAS:
-- heroBiomarkers: SOLO los 1-3 más importantes (alterados primero)
-- otherBiomarkers: resto en rango normal (solo name/value/unit/flag)
-- vitalityScore: 100 si todo normal, baja por cada alterado
-- Si no hay tendencia longitudinal, trend: [] y omite trendDir
-- Omite sistemas sin datos
-- Ordena: critical primero
+- heroBiomarkers: los 1-3 más importantes (alterados primero, o con tendencia preocupante aunque ahora estén normales)
+- trend: incluye TODOS los estudios donde el marcador aparece, en orden cronológico
+- trendDir: basado en la dirección del historial completo
+- vitalityScore: 100 = perfecto; baja por alteraciones actuales Y por historial de problemas
+- clinicalInterpretation: analiza el patrón de todo el caso, no solo el último resultado
+- Omite sistemas sin datos. Ordena: critical primero.
 
-DATOS:
+DATOS DEL PACIENTE:
 ${base}
 
-HISTORIAL (${allStudies.length} estudios):
-${historialText}
+HISTORIAL COMPLETO DE LABORATORIO (TODAS las fechas — usa para calcular trend y trendDir):
+${labTableText}
 
-BIOMARCADORES RECIENTES (${biomarkers.length} total, ${alteredBiomarkers.length} alterados):
-${biomarkersText}
+⚠️ PARA EL CAMPO "value": usa el valor más reciente disponible del marcador.
+Lista de valores del estudio más reciente (${canonicalTable.latestDate}):
+${latest.text}
+
+Total último estudio: ${latest.total} marcadores | ${latest.altered} alterados.
 `;
 
     case 3: return `${style}
 Eres el clínico integrador del PDI (Protocolo de Diagnóstico Integral).
 
 Genera el **MÓDULO 3 — EVALUACIÓN CLÍNICA SISTÉMICA** del reporte médico.
-Este módulo correlaciona los síntomas del paciente con los hallazgos de laboratorio, incluyendo la evolución histórica.
+
+📌 MISIÓN: Haz la clínica del caso COMPLETO. No reportes solo el último estudio — eres un médico que lee todo el expediente, identifica tendencias en el tiempo, y conecta cada síntoma con su evidencia de laboratorio a lo largo de la historia del paciente.
 
 ${base}
 
-BIOMARCADORES ACTUALES ALTERADOS (estudio más reciente):
-${alteredBiomarkers.length > 0
-  ? alteredBiomarkers.map(b => `• ${b.name}: ${b.value} ${b.unit} (Ref: ${b.referenceRange ?? 'N/D'}) → ${b.flag}`).join('\n')
-  : '• Ningún biomarcador alterado en el estudio más reciente.'}
+════════════════════════════════════════════════════════
+DATOS DE LABORATORIO — HISTORIAL COMPLETO DEL PACIENTE
+(Cada biomarcador muestra TODOS sus estudios en orden cronológico.
+ El valor marcado con ◄ ACTUAL es el del estudio más reciente: ${canonicalTable.latestDate})
+════════════════════════════════════════════════════════
+${clinicalHistoryText}
 
-HISTORIAL LONGITUDINAL (${allStudies.length} estudios — incluye biomarcadores que ya mejoraron):
-${historialText}
+BIOMARCADORES ALTERADOS EN EL ESTUDIO ACTUAL (${canonicalTable.latestDate}):
+${alteredBiomarkersText}
 
-RESPUESTAS DE ENTREVISTA CLÍNICA (voz del paciente):
+════════════════════════════════════════════════════════
+ENTREVISTA CLÍNICA — VOZ DEL PACIENTE
+════════════════════════════════════════════════════════
 ${interviewText}
 ${differentialText}
 ${doctorNotesText ? `
-OBSERVACIONES CLÍNICAS DEL MÉDICO (hallazgos directos, alta prioridad diagnóstica):
+OBSERVACIONES DIRECTAS DEL MÉDICO (prioridad alta):
 ${doctorNotesText}
 ` : ''}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 Para cada sistema con síntomas O laboratorio alterado (actual O histórico):
 ### [Sistema]
-- **Síntomas reportados**: (de la entrevista, sin mencionar códigos de pregunta)
-- **Observación médica**: (si el médico anotó algo para este sistema, incorpóralo explícitamente)
-- **Hallazgos de laboratorio**: (valores actuales relevantes; si hubo alteraciones pasadas que ya mejoraron, mencionarlas brevemente como "previamente alterado, actualmente en recuperación ↘ mejorando")
-- **Correlación clínica**: análisis de cómo los síntomas y los labs se explican mutuamente
-- **Nivel de preocupación**: 🔴 Alto / 🟡 Moderado / 🟢 Bajo (mejorando) — con justificación de 1 línea
+- **Síntomas reportados**: (de la entrevista, sin mencionar códigos)
+- **Observación médica**: (si el médico anotó algo, incorpóralo)
+- **Hallazgos de laboratorio**: cita los valores REALES del historial con el formato "[fecha]: valor → [fecha]: valor ◄ actual". Si mejoró: menciona el valor alterado original Y el actual normalizado.
+- **Correlación clínica**: cómo los síntomas y los labs se explican mutuamente a través del tiempo
+- **Nivel de preocupación**: 🔴 Alto / 🟡 Moderado / 🟢 Bajo (mejorando) — justificación de 1 línea
 
-INSTRUCCIÓN CLAVE: Si un biomarcador estuvo alterado en estudios anteriores pero ya normalizó, inclúyelo en el sistema correspondiente con tendencia "↘ mejorando" y nivel 🟢. No lo omitas — forma parte de la historia clínica del paciente.
+REGLAS:
+- Usa los valores exactos del historial de arriba (no inventes ni estimes valores)
+- Un marcador que mejoró NO desaparece — se documenta como "↘ en recuperación" con nivel 🟢
+- Marca tendencias: ↗ empeorando | ↘ mejorando | ↔ estable | ⇿ fluctuante
+- Conecta siempre los síntomas del paciente con los datos de laboratorio
 
-Sé analítico y breve. Máximo 4 líneas por sección.`;
+Sé analítico y preciso. Máximo 4 líneas por sección.`;
+
 
 
     case 4: return `${style}
@@ -277,8 +661,8 @@ ${approvedModules[1] ? `=== PERFIL DEL PACIENTE ===\n${truncate(approvedModules[
 ${approvedModules[2] ? `=== ANÁLISIS DE LABORATORIO ===\n${extractM2Summary(approvedModules[2])}\n` : ''}
 ${approvedModules[3] ? `=== EVALUACIÓN CLÍNICA ===\n${truncate(approvedModules[3], 3000)}\n` : ''}
 
-BIOMARCADORES ALTERADOS (sólo los fuera de rango):
-${alteredBiomarkers.map(b => `• ${b.name}: ${b.value} ${b.unit} → ${b.flag}`).join('\n') || 'Ninguno alterado en estudio reciente.'}
+BIOMARCADORES ALTERADOS (estudio más reciente):
+${alteredBiomarkersText}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 ## 1. Diagnósticos Primarios (alta probabilidad)
@@ -313,8 +697,8 @@ ${base}
 DIAGNÓSTICO Y CONTEXTO CLÍNICO:
 ${approvedModules[4] ? approvedModules[4] : 'Ver módulos anteriores.'}
 
-TODOS LOS BIOMARCADORES:
-${biomarkersText}
+TABLA CANÓNICA DE LABORATORIO:
+${labTableText}
 
 ESTRUCTURA OBLIGATORIA DEL MÓDULO:
 ## 1. Prioridades de Intervención Inmediata (0-4 semanas)
@@ -344,27 +728,59 @@ Sé específico y accionable. Cada recomendación debe tener un "por qué" claro
   }
 }
 
-// ─── Route handler ─────────────────────────────────────────────────────────────
+// ─── Route handler ────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   try {
-    const { moduleNum, patient, biomarkers, allStudies, interviewAnswers, approvedModules } = await req.json();
+    const { moduleNum, patient, patientId, interviewAnswers, approvedModules } = await req.json();
 
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json({ error: 'Falta GEMINI_API_KEY' }, { status: 500 });
+    }
+
+    // Build canonical table server-side — same data as the master table the doctor sees.
+    const resolvedPatientId = patientId ?? patient?.id;
+    console.log('[report/generate] patientId:', resolvedPatientId, '| SUPABASE_URL:', !!process.env.NEXT_PUBLIC_SUPABASE_URL, '| SERVICE_KEY:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+    const canonicalTable = resolvedPatientId
+      ? await buildCanonicalTable(resolvedPatientId)
+      : null;
+
+    console.log('[report/generate] canonicalTable:', canonicalTable
+      ? `✅ ${canonicalTable.rows.length} filas | fechas: ${canonicalTable.studyDates.join(', ')} | última: ${canonicalTable.latestDate}`
+      : '❌ NULL — query falló o no hay datos'
+    );
+
+    if (canonicalTable) {
+      // Log TSH specifically to trace the issue
+      const tsh = canonicalTable.rows.find(r => r.canonical.includes('tsh') || r.canonical.includes('tiroides'));
+      if (tsh) console.log('[report/generate] TSH row:', JSON.stringify(tsh.readings));
+    }
+
+    if (!canonicalTable || canonicalTable.rows.length === 0) {
+      return NextResponse.json(
+        { error: 'No hay datos de laboratorio disponibles. Asegúrate de que los estudios estén guardados.' },
+        { status: 400 }
+      );
     }
 
     const model = genAI.getGenerativeModel({
       model: 'gemini-2.5-flash-lite',
       generationConfig: {
         temperature: 0.4,
-        maxOutputTokens: moduleNum === 2 ? 16000 : [4, 5].includes(moduleNum) ? 12000 : 8192
+        maxOutputTokens: moduleNum === 1 ? 16000 : moduleNum === 2 ? 16000 : [4, 5].includes(moduleNum) ? 12000 : 8192
       }
     });
 
-    const prompt = buildPrompt(moduleNum, patient, biomarkers, allStudies ?? [], interviewAnswers, approvedModules);
+    const prompt = buildPrompt(moduleNum, patient, canonicalTable, interviewAnswers, approvedModules);
     const result = await model.generateContent(prompt);
-    const content = result.response.text();
+    let content = result.response.text();
+
+    // Module 2: override all numeric values with ground-truth from canonical table.
+    // The AI is only trusted for interpretive text, never for numbers.
+    if (moduleNum === 2) {
+      content = fixModule2Json(content, canonicalTable);
+    }
 
     return NextResponse.json({ content });
 

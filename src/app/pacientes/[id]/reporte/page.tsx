@@ -51,18 +51,70 @@ const MODULE_DEFS = [
   { num: 6, icon: '📊', title: 'Gráficas Comparativas', desc: 'Gráficas de evolución comparativas seleccionadas desde el perfil del paciente.', color: '#d4af37', isComparative: true },
 ];
 
-// ─── Simple Markdown renderer ─────────────────────────────────────────────────
+// ─── Rich Markdown renderer ──────────────────────────────────────────────────
 function renderMarkdown(text: string): string {
-  return text
-    .replace(/^## (.+)$/gm, '<h2 style="font-size:18px;font-weight:700;margin:24px 0 10px;color:var(--text-primary)">$1</h2>')
-    .replace(/^### (.+)$/gm, '<h3 style="font-size:15px;font-weight:600;margin:18px 0 8px;color:var(--gold-primary)">$1</h3>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary)">$1</strong>')
-    .replace(/^- (.+)$/gm, '<li style="margin:4px 0;padding-left:4px">$1</li>')
-    .replace(/(<li.*<\/li>\n?)+/g, s => `<ul style="padding-left:20px;margin:8px 0">${s}</ul>`)
-    .replace(/\n\n/g, '<br/><br/>')
+  // ── 1. Tables ────────────────────────────────────────────────────────────────
+  // Match GFM tables: header row | separator row | data rows
+  text = text.replace(
+    /^(\|.+\|)\n\|[-:| ]+\|\n((?:\|.+\|\n?)*)/gm,
+    (_, header, body) => {
+      const parseRow = (row: string) =>
+        row.trim().slice(1, -1).split('|').map(c => c.trim());
+      const headers = parseRow(header)
+        .map(h => `<th style="padding:8px 14px;text-align:left;font-size:12px;font-weight:700;color:var(--gold-primary);border-bottom:1px solid rgba(212,175,55,0.3);white-space:nowrap">${h}</th>`)
+        .join('');
+      const rows = body.trim().split('\n')
+        .filter(Boolean)
+        .map((r: string) => {
+          const cells = parseRow(r)
+            .map(c => `<td style="padding:7px 14px;font-size:13px;color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.04)">${c}</td>`)
+            .join('');
+          return `<tr>${cells}</tr>`;
+        }).join('');
+      return `<div style="overflow-x:auto;margin:12px 0"><table style="width:100%;border-collapse:collapse;background:rgba(255,255,255,0.02);border-radius:8px;overflow:hidden"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+  );
+
+  // ── 2. Blockquote callouts (> text) ─────────────────────────────────────────
+  text = text.replace(
+    /^(> .+(?:\n> .+)*)/gm,
+    match => {
+      const content = match.replace(/^> /gm, '');
+      return `<div style="margin:10px 0;padding:10px 14px;border-left:3px solid var(--gold-primary);background:rgba(212,175,55,0.06);border-radius:0 6px 6px 0;font-size:13px;color:var(--text-secondary);line-height:1.6">${content}</div>`;
+    }
+  );
+
+  // ── 3. Horizontal rules ──────────────────────────────────────────────────────
+  text = text.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.07);margin:20px 0">');
+
+  // ── 4. Headings ─────────────────────────────────────────────────────────────
+  text = text
+    .replace(/^## (.+)$/gm, '<h2 style="font-size:17px;font-weight:700;margin:28px 0 10px;color:var(--text-primary);padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.07)">$1</h2>')
+    .replace(/^### (.+)$/gm, '<h3 style="font-size:14px;font-weight:600;margin:16px 0 6px;color:var(--gold-primary)">$1</h3>');
+
+  // ── 5. Inline formatting ────────────────────────────────────────────────────
+  text = text
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary);font-weight:600">$1</strong>')
+    .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:12px;font-family:monospace">$1</code>');
+
+  // ── 6. Lists ─────────────────────────────────────────────────────────────────
+  text = text
+    .replace(/^- (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;line-height:1.65">$1</li>')
+    .replace(/(<li.*<\/li>\n?)+/g, s => `<ul style="padding-left:20px;margin:8px 0">${s}</ul>`);
+
+  // ── 7. Paragraphs ────────────────────────────────────────────────────────────
+  text = text.replace(/\n\n/g, '<br/><br/>');
+
+  // ── 8. Status emojis ─────────────────────────────────────────────────────────
+  text = text
     .replace(/🔴/g, '<span style="color:#ef4444">🔴</span>')
     .replace(/🟡/g, '<span style="color:#f59e0b">🟡</span>')
-    .replace(/🟢/g, '<span style="color:#22c55e">🟢</span>');
+    .replace(/🟢/g, '<span style="color:#22c55e">🟢</span>')
+    .replace(/⚡/g, '<span style="color:#f59e0b">⚡</span>')
+    .replace(/✅/g, '<span style="color:#22c55e">✅</span>')
+    .replace(/⚠️/g, '<span style="color:#f59e0b">⚠️</span>');
+
+  return text;
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -200,20 +252,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
         body: JSON.stringify({
           moduleNum: num,
           patient,
-          biomarkers,
-          allStudies: allStudies.map(s => {
-            // Use the real clinical exam date (not the upload timestamp)
-            const fileDate = (s as any).file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
-            const clinicalDate = (s as any).exam_date?.slice(0, 10)
-              ?? fileDate
-              ?? (s as any).created_at?.slice(0, 10)
-              ?? '';
-            return {
-              date: clinicalDate,
-              name: (s as any).file_name ?? (s as any).name ?? 'Estudio',
-              biomarkers: (s as any).biomarkers ?? [],
-            };
-          }),
+          patientId: id,
           interviewAnswers,
           approvedModules: approvedModules(),
         }),
