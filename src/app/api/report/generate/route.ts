@@ -191,12 +191,15 @@ function latestStudySummary(table: CanonicalTable): { total: number; altered: nu
 
 // ─── Clinical history text for modules 3/4/5 ─────────────────────────────────
 // Vertical format — one block per biomarker, ALL historical values listed.
-// Much clearer than a horizontal pivot table for the AI to read correctly.
+// Each reading is labeled with its study index so the AI cannot collapse them.
 function buildClinicalHistoryText(table: CanonicalTable): string {
+  const totalStudies = table.studyDates.length;
+
   const lines: string[] = [
-    `═══ HISTORIAL CLÍNICO COMPLETO — ${table.studyDates.length} estudios ═══`,
-    `Fechas analizadas: ${table.studyDates.join(' | ')}`,
-    `ESTUDIO ACTUAL (más reciente): ${table.latestDate}`,
+    `═══ HISTORIAL CLÍNICO COMPLETO — ${totalStudies} estudios ═══`,
+    `INSTRUCCIÓN CRÍTICA: Este historial contiene ${totalStudies} estudios. Debes analizar y citar TODOS los estudios intermedios, no solo el primero y el último.`,
+    `Fechas de los ${totalStudies} estudios: ${table.studyDates.map((d, i) => `Estudio ${i + 1} (${d})`).join(' | ')}`,
+    `ESTUDIO ACTUAL (más reciente): ${table.latestDate} = Estudio ${totalStudies}`,
     '',
   ];
 
@@ -207,23 +210,29 @@ function buildClinicalHistoryText(table: CanonicalTable): string {
       const last = row.readings[row.readings.length - 1];
       const isActual = (r: { date: string }) => r.date === table.latestDate;
 
-      // Trend direction based on flag history
+      // Compute trend across ALL readings (not just first vs last)
       let trendTag = '';
       if (row.readings.length > 1) {
         const firstFlag = row.readings[0].flag;
         const lastFlag = last.flag;
         const anyAltered = row.readings.some(r => r.flag !== 'Normal');
-        trendTag = !anyAltered ? ' [↔ siempre normal]'
-          : lastFlag === 'Normal' && firstFlag !== 'Normal' ? ' [↘ MEJORÓ]'
-          : lastFlag !== 'Normal' && firstFlag === 'Normal' ? ' [↗ EMPEORÓ]'
-          : ' [⇿ fluctuante]';
+        const numAltered = row.readings.filter(r => r.flag !== 'Normal').length;
+        const trendNote = row.readings.length > 2
+          ? ` — ${numAltered}/${row.readings.length} estudios alterados`
+          : '';
+        trendTag = !anyAltered ? ` [↔ siempre normal en ${row.readings.length} estudios]`
+          : lastFlag === 'Normal' && firstFlag !== 'Normal' ? ` [↘ MEJORÓ — era ${firstFlag}, ahora Normal${trendNote}]`
+          : lastFlag !== 'Normal' && firstFlag === 'Normal' ? ` [↗ EMPEORÓ — era Normal, ahora ${lastFlag}${trendNote}]`
+          : ` [⇿ fluctuante${trendNote}]`;
       }
 
-      lines.push(`  ${row.name} (${row.unit})${trendTag}`);
+      // Label each reading with its study number so AI can't collapse to first/last
+      lines.push(`  ${row.name} (${row.unit}) — ${row.readings.length} mediciones${trendTag}`);
       for (const r of row.readings) {
+        const studyIdx = table.studyDates.indexOf(r.date) + 1;
         const marker = isActual(r) ? ' ◄ ACTUAL' : '';
         const flag = r.flag !== 'Normal' ? ` ⚠ ${r.flag}` : ' ✓';
-        lines.push(`    ${r.date}: ${r.value}${flag}${marker}`);
+        lines.push(`    [Estudio ${studyIdx}/${totalStudies}] ${r.date}: ${r.value}${flag}${marker}`);
       }
     }
     lines.push('');
@@ -260,6 +269,14 @@ function fixModule2Json(raw: string, table: CanonicalTable): string {
       return undefined;
     };
 
+    // Helper: compute months elapsed since a YYYY-MM-DD date string
+    const monthsSince = (dateStr: string): number => {
+      const d = new Date(dateStr + 'T12:00:00');
+      if (isNaN(d.getTime())) return 0;
+      const now = new Date();
+      return (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+    };
+
     for (const system of data.systems) {
       for (const hero of (system.heroBiomarkers ?? [])) {
         const row = findRow(hero.name ?? '');
@@ -268,6 +285,8 @@ function fixModule2Json(raw: string, table: CanonicalTable): string {
         // Override value and flag with DB ground truth
         hero.value = isNaN(Number(last.value)) ? last.value : Number(last.value);
         hero.flag = last.flag;
+        // Attach data age so the UI can show a staleness warning
+        hero.dataAgeMonths = monthsSince(last.date);
         // Override trend with ALL readings from DB
         hero.trend = row.readings.map(r => ({
           date: r.date.slice(0, 7),   // YYYY-MM
@@ -586,6 +605,7 @@ REGLAS:
 - vitalityScore: 100 = perfecto; baja por alteraciones actuales Y por historial de problemas
 - clinicalInterpretation: analiza el patrón de todo el caso, no solo el último resultado
 - Omite sistemas sin datos. Ordena: critical primero.
+- ANTIGÜEDAD DE DATOS: Si el único dato disponible de un marcador es de hace >18 meses, NO uses alertLevel "critical" solo por ese marcador. Baja el alertLevel a "moderate" y en keyAlert indica "Dato de [año] — requiere actualización". Un dato antiguo puede haber cambiado; no iguales datos viejos a alarmas actuales.
 
 DATOS DEL PACIENTE:
 ${base}
@@ -605,14 +625,20 @@ Eres el clínico integrador del PDI (Protocolo de Diagnóstico Integral).
 
 Genera el **MÓDULO 3 — EVALUACIÓN CLÍNICA SISTÉMICA** del reporte médico.
 
-📌 MISIÓN: Haz la clínica del caso COMPLETO. No reportes solo el último estudio — eres un médico que lee todo el expediente, identifica tendencias en el tiempo, y conecta cada síntoma con su evidencia de laboratorio a lo largo de la historia del paciente.
+⚠️ REGLA CRÍTICA — ANÁLISIS DE TODOS LOS ESTUDIOS:
+Este paciente tiene ${canonicalTable.studyDates.length} estudios (${canonicalTable.studyDates.join(', ')}).
+DEBES analizar y citar los valores de CADA UNO de los ${canonicalTable.studyDates.length} estudios para cada biomarcador.
+PROHIBIDO resumir el historial mostrando solo el primer y último valor — eso borra la evolución clínica real.
+Si un marcador tiene 5 mediciones, muestra las 5. Si tiene 3, muestra las 3.
+
+📌 MISIÓN: Haz la clínica del caso COMPLETO. Eres un médico que lee todo el expediente, identifica tendencias en el tiempo, y conecta cada síntoma con su evidencia de laboratorio a lo largo de la historia del paciente.
 
 ${base}
 
 ════════════════════════════════════════════════════════
 DATOS DE LABORATORIO — HISTORIAL COMPLETO DEL PACIENTE
-(Cada biomarcador muestra TODOS sus estudios en orden cronológico.
- El valor marcado con ◄ ACTUAL es el del estudio más reciente: ${canonicalTable.latestDate})
+(Cada biomarcador lista TODOS sus estudios en orden cronológico [Estudio 1/N → Estudio N/N].
+ El marcador ◄ ACTUAL indica el estudio más reciente: ${canonicalTable.latestDate})
 ════════════════════════════════════════════════════════
 ${clinicalHistoryText}
 
@@ -634,17 +660,21 @@ Para cada sistema con síntomas O laboratorio alterado (actual O histórico):
 ### [Sistema]
 - **Síntomas reportados**: (de la entrevista, sin mencionar códigos)
 - **Observación médica**: (si el médico anotó algo, incorpóralo)
-- **Hallazgos de laboratorio**: cita los valores REALES del historial con el formato "[fecha]: valor → [fecha]: valor ◄ actual". Si mejoró: menciona el valor alterado original Y el actual normalizado.
-- **Correlación clínica**: cómo los síntomas y los labs se explican mutuamente a través del tiempo
-- **Nivel de preocupación**: 🔴 Alto / 🟡 Moderado / 🟢 Bajo (mejorando) — justificación de 1 línea
+- **Hallazgos de laboratorio**: Lista TODOS los valores de CADA estudio del paciente en orden cronológico.
+  Formato obligatorio: "[Estudio 1] fecha: valor → [Estudio 2] fecha: valor → ... → [Estudio N] fecha: valor ◄ actual"
+  NUNCA omitas estudios intermedios. Si un marcador tiene 5 mediciones, escríbelas todas.
+  Si el valor mejoró: documenta el valor alterado original, los intermedios, Y el actual normalizado.
+- **Correlación clínica**: cómo los síntomas y los labs se explican mutuamente a través del tiempo, citando la evolución completa
+- **Nivel de preocupación**: 🔴 Alto / 🟡 Moderado / 🟢 Bajo (mejorando) — justificación de 1 línea basada en la tendencia COMPLETA
 
 REGLAS:
 - Usa los valores exactos del historial de arriba (no inventes ni estimes valores)
 - Un marcador que mejoró NO desaparece — se documenta como "↘ en recuperación" con nivel 🟢
-- Marca tendencias: ↗ empeorando | ↘ mejorando | ↔ estable | ⇿ fluctuante
-- Conecta siempre los síntomas del paciente con los datos de laboratorio
+- Marca tendencias BASADAS EN TODOS LOS ESTUDIOS: ↗ empeorando | ↘ mejorando | ↔ estable | ⇿ fluctuante
+- Si un marcador estuvo alterado en estudios intermedios pero no en el primero o el último, eso es clinicamente importante — menciónalo
+- Conecta siempre los síntomas del paciente con los datos de laboratorio de toda la historia
 
-Sé analítico y preciso. Máximo 4 líneas por sección.`;
+Sé analítico y preciso. Máximo 5 líneas por sección.`;
 
 
 

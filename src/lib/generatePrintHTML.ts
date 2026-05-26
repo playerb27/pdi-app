@@ -189,18 +189,32 @@ function m2JsonToHtml(content: string): string {
       if (sys.heroBiomarkers?.length) {
         html += `<div class="m2-hero-grid">`;
         for (const bm of sys.heroBiomarkers) {
-          const flagCss = (bm.flag ?? '').toLowerCase() === 'normal' ? '#15803d' : '#dc2626';
+          const isNormal = (bm.flag ?? '').toLowerCase() === 'normal';
+          const ageMonths: number = typeof bm.dataAgeMonths === 'number' ? bm.dataAgeMonths : 0;
+          const isStale = ageMonths > 18;
+          const ageYears = Math.floor(ageMonths / 12);
+          const ageRemMonths = ageMonths % 12;
+          const ageLabel = ageYears > 0
+            ? (ageRemMonths > 0 ? `${ageYears} año${ageYears > 1 ? 's' : ''} y ${ageRemMonths} mes${ageRemMonths > 1 ? 'es' : ''}` : `${ageYears} año${ageYears > 1 ? 's' : ''}`)
+            : `${ageMonths} mes${ageMonths !== 1 ? 'es' : ''}`;
+          // Soften color for stale non-normal data
+          const flagCss = isNormal ? '#15803d' : (isStale ? '#b45309' : '#dc2626');
           html += `
-          <div class="m2-hero-card" style="border-color:${flagCss}40">
-            <div class="m2-hero-name">${bm.name}</div>
+          <div class="m2-hero-card" style="border-color:${flagCss}40;opacity:${isStale ? '0.85' : '1'}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div class="m2-hero-name">${bm.name}</div>
+              ${isStale && ageMonths > 0 ? `<span style="font-size:8px;color:#78716c;background:#f5f0eb;border:1px solid #e5e0d8;border-radius:99px;padding:2px 6px;white-space:nowrap">⏱ ${ageLabel} atrás</span>` : ''}
+            </div>
             <div class="m2-hero-value" style="color:${flagCss}">${bm.value} <span class="m2-hero-unit">${bm.unit}</span></div>
             <div class="m2-flag" style="color:${flagCss}">${bm.flag}${bm.trendDir ? ` · ${bm.trendDir}` : ''}</div>
+            ${isStale && !isNormal ? `<div style="margin-top:6px;padding:5px 8px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:10px;color:#92400e">⚠ Dato de hace ${ageLabel} — puede haber cambiado. Repetir estudio.</div>` : ''}
             ${bm.patientExplanation ? `<div class="m2-explanation">💬 ${bm.patientExplanation}</div>` : ''}
             ${bm.refMin != null && bm.refMax != null ? `<div class="m2-ref">Referencia: ${bm.refMin} – ${bm.refMax} ${bm.unit}</div>` : ''}
           </div>`;
         }
         html += `</div>`;
       }
+
 
       if (sys.otherBiomarkers?.length) {
         html += `<div class="m2-others"><strong>En rango normal:</strong> ${sys.otherBiomarkers.map((b: any) => `${b.name} (${b.value} ${b.unit})`).join(' · ')}</div>`;

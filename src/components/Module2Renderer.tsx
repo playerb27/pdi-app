@@ -10,6 +10,7 @@ interface HeroBiomarker {
   name: string; value: number | string; unit: string;
   refMin?: number | null; refMax?: number | null; flag: string;
   patientExplanation?: string; trend?: TrendPoint[]; trendDir?: TrendDir;
+  dataAgeMonths?: number; // months since latest reading date — set by server post-processor
 }
 interface OtherBiomarker { name: string; value: string | number; unit: string; flag: string; }
 interface SystemData {
@@ -155,14 +156,54 @@ function TrendBadge({ dir }: { dir: TrendDir }) {
 }
 
 // ─── HeroBiomarkerCard ────────────────────────────────────────────────────────
+// Stale threshold: readings older than 18 months get a visual softening + warning
+const STALE_THRESHOLD_MONTHS = 18;
+
 function HeroBiomarkerCard({ bm }: { bm: HeroBiomarker }) {
-  const c = flagColor(bm.flag);
+  const ageMonths = bm.dataAgeMonths ?? 0;
+  const isStale = ageMonths > STALE_THRESHOLD_MONTHS;
+  const ageYears = Math.floor(ageMonths / 12);
+  const ageRemMonths = ageMonths % 12;
+  const ageLabel = ageYears > 0
+    ? (ageRemMonths > 0 ? `${ageYears} año${ageYears > 1 ? 's' : ''} y ${ageRemMonths} mes${ageRemMonths > 1 ? 'es' : ''}` : `${ageYears} año${ageYears > 1 ? 's' : ''}`)
+    : `${ageMonths} mes${ageMonths !== 1 ? 'es' : ''}`;
+
+  // For stale non-normal data, soften to muted amber instead of red/hard color
+  const rawColor = flagColor(bm.flag);
+  const c = isStale && bm.flag !== 'Normal'
+    ? 'rgba(245,158,11,0.65)'
+    : rawColor;
+
   return (
-    <div style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${c}28`, borderRadius: 16, padding: 20, position: 'relative', overflow: 'hidden' }}>
+    <div style={{
+      background: isStale ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.03)',
+      border: `1px solid ${isStale && bm.flag !== 'Normal' ? 'rgba(245,158,11,0.22)' : c + '28'}`,
+      borderRadius: 16, padding: 20, position: 'relative', overflow: 'hidden',
+      opacity: isStale ? 0.85 : 1,
+    }}>
       <div style={{ position: 'absolute', top: -40, right: -40, width: 110, height: 110, borderRadius: '50%', background: `${c}07`, pointerEvents: 'none' }} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
         <p style={{ margin: 0, fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '1.5px', lineHeight: 1.3 }}>{bm.name}</p>
-        <div style={{ padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 800, background: `${c}22`, color: c, border: `1px solid ${c}40`, flexShrink: 0, marginLeft: 8 }}>{bm.flag}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 8 }}>
+          <div style={{
+            padding: '3px 10px', borderRadius: 99, fontSize: 10, fontWeight: 800, flexShrink: 0,
+            background: isStale && bm.flag !== 'Normal' ? 'rgba(245,158,11,0.1)' : `${c}22`,
+            color: c,
+            border: `1px solid ${isStale && bm.flag !== 'Normal' ? 'rgba(245,158,11,0.3)' : c + '40'}`,
+          }}>{bm.flag}</div>
+          {isStale && ageMonths > 0 && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 3,
+              padding: '2px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.35)',
+              whiteSpace: 'nowrap',
+            }}>
+              ⏱ Dato de hace {ageLabel}
+            </div>
+          )}
+        </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 14 }}>
         <span style={{ fontSize: 38, fontWeight: 900, color: c, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{bm.value}</span>
@@ -173,10 +214,24 @@ function HeroBiomarkerCard({ bm }: { bm: HeroBiomarker }) {
         <div style={{ marginBottom: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '1px' }}>Evolución temporal</span>
-            {/* Only show negative trend badge if current state is not Normal */}
             {bm.trendDir && !(bm.flag?.toLowerCase() === 'normal' && bm.trendDir === 'empeorando') && <TrendBadge dir={bm.trendDir} />}
           </div>
           <Sparkline trend={bm.trend} flag={bm.flag} />
+        </div>
+      )}
+      {/* Staleness warning — shown for old non-Normal values */}
+      {isStale && bm.flag !== 'Normal' && (
+        <div style={{
+          marginTop: 8, marginBottom: 8, padding: '8px 12px', borderRadius: 10,
+          background: 'rgba(245,158,11,0.05)',
+          border: '1px solid rgba(245,158,11,0.15)',
+          display: 'flex', alignItems: 'flex-start', gap: 6,
+        }}>
+          <span style={{ fontSize: 12, flexShrink: 0 }}>⚠️</span>
+          <p style={{ margin: 0, fontSize: 11, color: 'rgba(245,158,11,0.8)', lineHeight: 1.55 }}>
+            Este valor es de hace <strong style={{ color: 'rgba(245,158,11,0.95)' }}>{ageLabel}</strong>.
+            {' '}El estado actual puede haber cambiado — considera repetir el estudio.
+          </p>
         </div>
       )}
       {bm.patientExplanation && (
