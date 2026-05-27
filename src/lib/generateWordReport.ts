@@ -647,6 +647,33 @@ export async function generateWordReport(
               children.push(...cmpCharts);
             }
           }
+
+          // ── Doctor Note callout (golden left-border box) ───────────────────
+          const doctorNote = (group as any).doctorNote as string | undefined;
+          if (doctorNote?.trim()) {
+            children.push(spacer());
+            children.push(new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              borders: { ...noBorder(), left: { style: BorderStyle.SINGLE, size: 16, color: C.gold } },
+              rows: [new TableRow({
+                children: [new TableCell({
+                  shading: shading('FFFBEB'),
+                  margins: { top: 120, bottom: 120, left: 240, right: 240 },
+                  children: [
+                    new Paragraph({
+                      children: [run('💬  NOTA DEL MÉDICO', { size: 18, bold: true, color: '92400E' })],
+                      spacing: { before: 0, after: 80 },
+                    }),
+                    new Paragraph({
+                      children: [run(doctorNote, { size: 22, italics: true, color: '78350F' })],
+                      spacing: { before: 0, after: 0 },
+                    }),
+                  ],
+                })],
+              })],
+            }));
+            children.push(spacer());
+          }
         }
       }
     } else if (num === 2 && mod.content.includes('"systems"')) {

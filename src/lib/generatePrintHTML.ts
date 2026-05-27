@@ -438,12 +438,25 @@ export function generatePrintHTML(
           ${svgForSeries(s)}
         </div>`;
       }).join('');
+
+      // Doctor note callout — printed on white background below the dark chart area
+      const noteHtml = (group as any).doctorNote ? `
+        <div style="padding:14px 16px 18px;background:#fff;border-top:1px solid rgba(212,175,55,0.2)">
+          <div style="padding:13px 16px;border-left:4px solid #b8922a;background:#fffbeb;border-radius:0 8px 8px 0">
+            <p style="margin:0 0 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#92400e;display:flex;align-items:center;gap:5px">
+              💬 Nota del médico
+            </p>
+            <p style="margin:0;font-size:12.5px;color:#78350f;line-height:1.75;font-style:italic">${(group as any).doctorNote}</p>
+          </div>
+        </div>` : '';
+
       return `
       <div style="margin-bottom:24px;border:1px solid rgba(212,175,55,0.2);border-radius:14px;overflow:hidden;page-break-inside:avoid">
         <div style="background:rgba(212,175,55,0.06);padding:10px 16px;border-bottom:1px solid rgba(212,175,55,0.15)">
           <strong style="color:#d4af37;font-size:12px">📊 Comparativa ${gi + 1}: ${group.markers.join(' · ')}</strong>
         </div>
         <div style="padding:12px 16px;background:#0a0a15">${seriesHtml}</div>
+        ${noteHtml}
       </div>`;
     }).join('');
 

@@ -161,9 +161,9 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     });
   };
 
-  const handleAddToReport = async (names: string[]): Promise<boolean> => {
+  const handleAddToReport = async (names: string[], doctorNote?: string): Promise<boolean> => {
     try {
-      saveComparativeMarkers(id, names);
+      await saveComparativeMarkers(id, names, doctorNote);
       setAddedToReport(true);
       return true;
     } catch (e) {

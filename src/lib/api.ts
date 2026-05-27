@@ -343,6 +343,7 @@ export interface ComparativeGroup {
   id: string;
   markers: string[];
   createdAt: string;
+  doctorNote?: string;  // optional annotation from the doctor
 }
 
 export async function getComparativeGroups(patientId: string): Promise<ComparativeGroup[]> {
@@ -350,7 +351,7 @@ export async function getComparativeGroups(patientId: string): Promise<Comparati
   return patient?.comparative_groups ?? [];
 }
 
-export async function saveComparativeGroup(patientId: string, markers: string[]): Promise<void> {
+export async function saveComparativeGroup(patientId: string, markers: string[], doctorNote?: string): Promise<void> {
   const patient = await getPatientById(patientId);
   if (!patient) return;
   const existing = patient.comparative_groups ?? [];
@@ -358,9 +359,21 @@ export async function saveComparativeGroup(patientId: string, markers: string[])
     id: crypto.randomUUID(),
     markers,
     createdAt: new Date().toISOString(),
+    ...(doctorNote?.trim() ? { doctorNote: doctorNote.trim() } : {}),
   };
   await updatePatient(patientId, {
     comparative_groups: [...existing, newGroup]
+  });
+}
+
+export async function updateComparativeGroupNote(patientId: string, groupId: string, doctorNote: string): Promise<void> {
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing: ComparativeGroup[] = patient.comparative_groups ?? [];
+  await updatePatient(patientId, {
+    comparative_groups: existing.map(g =>
+      g.id === groupId ? { ...g, doctorNote: doctorNote.trim() || undefined } : g
+    )
   });
 }
 

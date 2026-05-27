@@ -3,12 +3,13 @@ import { useState, useEffect, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, FileText, CheckCircle2, Clock, Loader2,
-  ChevronDown, ChevronUp, Printer, RotateCcw, Save, Trash2
+  ChevronDown, ChevronUp, Printer, RotateCcw, Save, Trash2, MessageSquare, Edit3
 } from 'lucide-react';
 import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
   getReportModules, upsertReportModule, deleteReportModules,
-  Patient, Study, ReportModule, getComparativeGroups, removeComparativeGroup, clearComparativeGroups, type ComparativeGroup
+  Patient, Study, ReportModule, getComparativeGroups, removeComparativeGroup, clearComparativeGroups,
+  updateComparativeGroupNote, type ComparativeGroup
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
@@ -134,6 +135,10 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [saving, setSaving] = useState<Record<number, boolean>>({});
   const [expandedChart6, setExpandedChart6] = useState<ChartSeries | null>(null);
   const [m6Groups, setM6Groups] = useState<ComparativeGroup[]>([]);
+  // Inline note editing for each comparative group in section 6
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteInputs, setNoteInputs] = useState<Record<string, string>>({});
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
@@ -604,6 +609,81 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                       <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', padding: '12px' }}>
                                         Sin datos para los marcadores seleccionados.
                                       </p>
+                                    )}
+                                  </div>
+
+                                  {/* ── Doctor Note ───────────────────────────── */}
+                                  <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(212,175,55,0.1)' }}>
+                                    {editingNoteId === group.id ? (
+                                      /* Edit mode */
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        <textarea
+                                          value={noteInputs[group.id] ?? group.doctorNote ?? ''}
+                                          onChange={e => setNoteInputs(prev => ({ ...prev, [group.id]: e.target.value }))}
+                                          placeholder="Escribe una anotación clínica sobre esta comparativa..."
+                                          style={{ width: '100%', minHeight: '90px', padding: '12px 14px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '10px', color: '#fff', fontSize: '13px', lineHeight: 1.7, fontFamily: 'var(--font-main)', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
+                                          maxLength={1200}
+                                          autoFocus
+                                        />
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                                            {(noteInputs[group.id] ?? group.doctorNote ?? '').length}/1200
+                                          </span>
+                                          <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                              onClick={() => setEditingNoteId(null)}
+                                              style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}
+                                            >
+                                              Cancelar
+                                            </button>
+                                            <button
+                                              onClick={async () => {
+                                                setSavingNoteId(group.id);
+                                                const newNote = noteInputs[group.id] ?? group.doctorNote ?? '';
+                                                await updateComparativeGroupNote(id, group.id, newNote);
+                                                setM6Groups(prev => prev.map(g => g.id === group.id ? { ...g, doctorNote: newNote.trim() || undefined } : g));
+                                                setEditingNoteId(null);
+                                                setSavingNoteId(null);
+                                              }}
+                                              disabled={savingNoteId === group.id}
+                                              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 16px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: savingNoteId === group.id ? 'default' : 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
+                                            >
+                                              {savingNoteId === group.id ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />}
+                                              Guardar nota
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      /* View mode */
+                                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                                        {group.doctorNote ? (
+                                          <div style={{ flex: 1, padding: '12px 14px', background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.15)', borderRadius: '10px', borderLeft: '3px solid rgba(212,175,55,0.5)' }}>
+                                            <p style={{ margin: '0 0 4px', fontSize: '10px', fontWeight: 700, color: 'rgba(212,175,55,0.7)', display: 'flex', alignItems: 'center', gap: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                              <MessageSquare size={10} /> Nota del médico
+                                            </p>
+                                            <p style={{ margin: 0, fontSize: '13px', color: 'rgba(255,255,255,0.75)', lineHeight: 1.7 }}>
+                                              {group.doctorNote}
+                                            </p>
+                                          </div>
+                                        ) : (
+                                          <div style={{ flex: 1, padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '10px' }}>
+                                            <p style={{ margin: 0, fontSize: '12px', color: 'rgba(255,255,255,0.25)', fontStyle: 'italic' }}>
+                                              Sin anotación clínica — haz clic en Editar nota para añadir una
+                                            </p>
+                                          </div>
+                                        )}
+                                        <button
+                                          onClick={() => {
+                                            setEditingNoteId(group.id);
+                                            setNoteInputs(prev => ({ ...prev, [group.id]: group.doctorNote ?? '' }));
+                                          }}
+                                          style={{ flexShrink: 0, padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(212,175,55,0.25)', background: 'transparent', color: 'rgba(212,175,55,0.7)', cursor: 'pointer', fontSize: '11px', fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
+                                        >
+                                          <Edit3 size={11} />
+                                          {group.doctorNote ? 'Editar nota' : 'Añadir nota'}
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
                                 </div>

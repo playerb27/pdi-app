@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { X, BarChart2, FileText, Check, Loader2 } from 'lucide-react';
+import { X, BarChart2, FileText, Check, Loader2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import type { ChartSeries } from './ExpandedChartModal';
 import ExpandedChartModal from './ExpandedChartModal';
 
@@ -153,24 +153,25 @@ interface Props {
   series: ChartSeries[];
   patientId: string;
   onClose: () => void;
-  onAddToReport: (names: string[]) => Promise<boolean>;
+  onAddToReport: (names: string[], doctorNote?: string) => Promise<boolean>;
   onValueUpdated?: (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => void;
   documents?: any[];
 }
 
 export default function ComparativeModal({ series: initialSeries, patientId, onClose, onAddToReport, onValueUpdated, documents }: Props) {
-  // Keep a mutable local copy so edits from ExpandedChartModal persist in the comparative view
   const [localSeries, setLocalSeries] = useState<ChartSeries[]>(initialSeries);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Doctor note state
+  const [showNotePanel, setShowNotePanel] = useState(false);
+  const [doctorNote, setDoctorNote] = useState('');
+
   const names = localSeries.map(s => s.name);
 
-  // Called when ExpandedChartModal saves an edited point
   const handleValueUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
     if (newFlag === 'Excluido') {
-      // Point was deleted — filter it out from local state
       setLocalSeries(prev => prev.map(s => ({
         ...s,
         points: s.points.filter(p => !(p.biomarkerId === biomarkerId && p.studyId === studyId)),
@@ -198,14 +199,13 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
         ),
       } : null);
     }
-    // Propagate up to page.tsx
     onValueUpdated?.(biomarkerId, newValue, newFlag, studyId);
   };
 
   const handleAdd = async () => {
     setSaving(true);
     try {
-      const ok = await onAddToReport(names);
+      const ok = await onAddToReport(names, doctorNote || undefined);
       if (ok) {
         setSaved(true);
       } else {
@@ -235,19 +235,111 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-              <button
-                onClick={handleAdd}
-                disabled={saving || saved}
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '11px 22px', borderRadius: '12px', border: 'none', background: saved ? 'rgba(34,197,94,0.2)' : saving ? 'rgba(212,175,55,0.3)' : 'linear-gradient(135deg, #d4af37, #b8922a)', color: saved ? '#22c55e' : '#000', cursor: saving || saved ? 'default' : 'pointer', fontSize: '13px', fontWeight: 800, boxShadow: saved || saving ? 'none' : '0 4px 20px rgba(212,175,55,0.4)', transition: 'all 0.3s' }}
-              >
-                {saving ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : saved ? <Check size={15} /> : <FileText size={15} />}
-                {saving ? 'Guardando...' : saved ? 'Agregado al reporte' : 'Agregar al reporte maestro'}
-              </button>
+              {/* Add to report button */}
+              {!saved ? (
+                <button
+                  onClick={() => setShowNotePanel(prev => !prev)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '11px 22px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #d4af37, #b8922a)', color: '#000', cursor: 'pointer', fontSize: '13px', fontWeight: 800, boxShadow: '0 4px 20px rgba(212,175,55,0.4)', transition: 'all 0.3s' }}
+                >
+                  <FileText size={15} />
+                  Agregar al reporte maestro
+                  {showNotePanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '11px 22px', borderRadius: '12px', background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', fontSize: '13px', fontWeight: 700 }}>
+                  <Check size={15} />
+                  Agregado al reporte
+                </div>
+              )}
               <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '10px', cursor: 'pointer', color: 'rgba(255,255,255,0.6)', display: 'flex' }}>
                 <X size={18} />
               </button>
             </div>
           </div>
+
+          {/* ── Doctor Note Panel ─────────────────────────────────────────────── */}
+          {showNotePanel && !saved && (
+            <div style={{
+              marginBottom: '24px',
+              padding: '20px 24px',
+              borderRadius: '16px',
+              background: 'rgba(212,175,55,0.05)',
+              border: '1px solid rgba(212,175,55,0.25)',
+              animation: 'slideDown 0.2s ease',
+            }}>
+              {/* Panel header */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <MessageSquare size={15} color="#d4af37" />
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#d4af37' }}>Anotación del Médico</p>
+                  <p style={{ margin: '1px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>Opcional · Se imprimirá junto con las gráficas en el PDF y Word</p>
+                </div>
+              </div>
+
+              <textarea
+                value={doctorNote}
+                onChange={e => setDoctorNote(e.target.value)}
+                placeholder="Ej: La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo..."
+                style={{
+                  width: '100%',
+                  minHeight: '110px',
+                  padding: '14px 16px',
+                  background: 'rgba(0,0,0,0.3)',
+                  border: '1px solid rgba(212,175,55,0.2)',
+                  borderRadius: '10px',
+                  color: '#fff',
+                  fontSize: '13px',
+                  lineHeight: 1.7,
+                  fontFamily: 'var(--font-main)',
+                  resize: 'vertical',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s',
+                }}
+                onFocus={e => (e.target.style.borderColor = 'rgba(212,175,55,0.6)')}
+                onBlur={e => (e.target.style.borderColor = 'rgba(212,175,55,0.2)')}
+                maxLength={1200}
+                autoFocus
+              />
+
+              {/* Character count + actions */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                <span style={{ fontSize: '11px', color: doctorNote.length > 1000 ? '#f59e0b' : 'rgba(255,255,255,0.25)' }}>
+                  {doctorNote.length}/1200 caracteres
+                </span>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={() => { setShowNotePanel(false); setDoctorNote(''); }}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleAdd}
+                    disabled={saving}
+                    style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '8px 20px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg, #d4af37, #b8922a)', color: '#000', cursor: saving ? 'default' : 'pointer', fontSize: '13px', fontWeight: 800, fontFamily: 'var(--font-main)', opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />}
+                    {saving ? 'Guardando...' : doctorNote.trim() ? 'Agregar con nota' : 'Agregar sin nota'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Saved confirmation with note preview */}
+          {saved && doctorNote.trim() && (
+            <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '12px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.2)' }}>
+              <p style={{ margin: '0 0 6px', fontSize: '11px', fontWeight: 700, color: '#22c55e', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <MessageSquare size={12} /> Nota del médico guardada
+              </p>
+              <p style={{ margin: 0, fontSize: '12px', color: 'rgba(255,255,255,0.5)', lineHeight: 1.6, fontStyle: 'italic' }}>
+                &ldquo;{doctorNote.slice(0, 160)}{doctorNote.length > 160 ? '...' : ''}&rdquo;
+              </p>
+            </div>
+          )}
 
           {/* Stacked charts */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -273,7 +365,10 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
         />
       )}
 
-      <style>{`@keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+        @keyframes slideDown { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+      `}</style>
     </>
   );
 }
