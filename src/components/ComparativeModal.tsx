@@ -340,7 +340,7 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
               <textarea
                 value={doctorNote}
                 onChange={e => setDoctorNote(e.target.value)}
-                placeholder="Ej: La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo..."
+                placeholder="Escribe tu anotación aquí, o usa la sugerencia de abajo como base..."
                 style={{
                   width: '100%',
                   minHeight: '110px',
@@ -362,6 +362,43 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
                 maxLength={1200}
                 autoFocus
               />
+
+              {/* Clickable example chip — visible only when textarea is empty */}
+              {!doctorNote && !aiGenerated && (
+                <div style={{ marginTop: '8px' }}>
+                  <p style={{ margin: '0 0 5px', fontSize: '10px', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>💡 Clic para usar como base:</p>
+                  <button
+                    onClick={() => setDoctorNote('La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo.')}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '10px 14px',
+                      borderRadius: '8px',
+                      background: 'rgba(212,175,55,0.04)',
+                      border: '1px dashed rgba(212,175,55,0.2)',
+                      color: 'rgba(255,255,255,0.45)',
+                      fontSize: '12px',
+                      lineHeight: 1.6,
+                      cursor: 'pointer',
+                      fontFamily: 'var(--font-main)',
+                      fontStyle: 'italic',
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={e => {
+                      (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.1)';
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(212,175,55,0.4)';
+                      (e.currentTarget as HTMLButtonElement).style.color = 'rgba(255,255,255,0.7)';
+                    }}
+                    onMouseLeave={e => {
+                      (e.currentTarget as HTMLButtonElement).style.background = 'rgba(212,175,55,0.04)';
+                      (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(212,175,55,0.2)';
+                      (e.currentTarget as HTMLButtonElement).style.color = 'rgba(255,255,255,0.45)';
+                    }}
+                  >
+                    La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo.
+                  </button>
+                </div>
+              )}
 
               {/* Character count + actions */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
