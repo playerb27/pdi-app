@@ -312,7 +312,7 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
                   title={aiGenerated ? 'Regenerar sugerencia IA' : 'Generar sugerencia con IA'}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px',
-                    padding: '7px 14px', borderRadius: '8px', border: 'none',
+                    padding: '7px 14px', borderRadius: '8px',
                     background: aiLoading ? 'rgba(139,92,246,0.15)' : 'linear-gradient(135deg,rgba(139,92,246,0.25),rgba(59,130,246,0.2))',
                     color: '#a78bfa', cursor: aiLoading ? 'default' : 'pointer',
                     fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)',
