@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { X, BarChart2, FileText, Check, Loader2, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, BarChart2, FileText, Check, Loader2, MessageSquare, ChevronDown, ChevronUp, Sparkles, RefreshCw } from 'lucide-react';
 import type { ChartSeries } from './ExpandedChartModal';
 import ExpandedChartModal from './ExpandedChartModal';
 
@@ -167,6 +167,8 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
   // Doctor note state
   const [showNotePanel, setShowNotePanel] = useState(false);
   const [doctorNote, setDoctorNote] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiGenerated, setAiGenerated] = useState(false); // true once AI has filled the textarea
 
   const names = localSeries.map(s => s.name);
 
@@ -215,6 +217,33 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
       alert('Error: ' + e.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const generateAiNote = async () => {
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/report/comparative-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ series: localSeries.map(s => ({
+          name: s.name,
+          unit: s.unit,
+          referenceRange: s.referenceRange,
+          points: s.points.map(p => ({ date: p.date, value: p.value, flag: p.flag })),
+        })) }),
+      });
+      const data = await res.json();
+      if (res.ok && data.note) {
+        setDoctorNote(data.note);
+        setAiGenerated(true);
+      } else {
+        alert('No se pudo generar la sugerencia: ' + (data.error ?? 'Error desconocido'));
+      }
+    } catch (e: any) {
+      alert('Error de red: ' + e.message);
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -272,11 +301,41 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
                 <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <MessageSquare size={15} color="#d4af37" />
                 </div>
-                <div>
+                <div style={{ flex: 1 }}>
                   <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#d4af37' }}>Anotación del Médico</p>
                   <p style={{ margin: '1px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.35)' }}>Opcional · Se imprimirá junto con las gráficas en el PDF y Word</p>
                 </div>
+                {/* AI Suggestion button */}
+                <button
+                  onClick={generateAiNote}
+                  disabled={aiLoading}
+                  title={aiGenerated ? 'Regenerar sugerencia IA' : 'Generar sugerencia con IA'}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '6px',
+                    padding: '7px 14px', borderRadius: '8px', border: 'none',
+                    background: aiLoading ? 'rgba(139,92,246,0.15)' : 'linear-gradient(135deg,rgba(139,92,246,0.25),rgba(59,130,246,0.2))',
+                    color: '#a78bfa', cursor: aiLoading ? 'default' : 'pointer',
+                    fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)',
+                    border: '1px solid rgba(139,92,246,0.35)',
+                    transition: 'all 0.2s',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {aiLoading
+                    ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
+                    : aiGenerated
+                      ? <><RefreshCw size={13} /> Regenerar</>
+                      : <><Sparkles size={13} /> Sugerencia IA</>}
+                </button>
               </div>
+
+              {/* AI-generated badge */}
+              {aiGenerated && !aiLoading && (
+                <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 10px', borderRadius: '6px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', width: 'fit-content' }}>
+                  <Sparkles size={11} color="#a78bfa" />
+                  <span style={{ fontSize: '11px', color: '#a78bfa', fontWeight: 600 }}>Sugerencia generada por IA — edítala libremente o úsala tal cual</span>
+                </div>
+              )}
 
               <textarea
                 value={doctorNote}

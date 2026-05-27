@@ -3,7 +3,7 @@ import { useState, useEffect, use, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeft, FileText, CheckCircle2, Clock, Loader2,
-  ChevronDown, ChevronUp, Printer, RotateCcw, Save, Trash2, MessageSquare, Edit3
+  ChevronDown, ChevronUp, Printer, RotateCcw, Save, Trash2, MessageSquare, Edit3, Sparkles, RefreshCw
 } from 'lucide-react';
 import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
@@ -139,6 +139,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteInputs, setNoteInputs] = useState<Record<string, string>>({});
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
+  const [aiLoadingId, setAiLoadingId] = useState<string | null>(null); // per-group AI loading
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
@@ -617,41 +618,85 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                     {editingNoteId === group.id ? (
                                       /* Edit mode */
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        {/* Toolbar: AI suggestion + char count */}
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                                          <button
+                                            onClick={async () => {
+                                              setAiLoadingId(group.id);
+                                              try {
+                                                // Build series for this group from allStudies
+                                                const groupSeries = group.markers.map((markerName: string) => {
+                                                  const points: { date: string; value: number; flag: string }[] = [];
+                                                  (allStudies ?? []).forEach((s: any) => {
+                                                    const bm = (s.biomarkers ?? []).find((b: any) => b.name === markerName || b.canonical_name === markerName);
+                                                    if (bm) {
+                                                      const d = s.exam_date ?? s.created_at ?? '';
+                                                      points.push({ date: d, value: parseFloat(bm.value), flag: bm.flag });
+                                                    }
+                                                  });
+                                                  return { name: markerName, unit: '', referenceRange: undefined, points };
+                                                }).filter((s: any) => s.points.length > 0);
+
+                                                const res = await fetch('/api/report/comparative-note', {
+                                                  method: 'POST',
+                                                  headers: { 'Content-Type': 'application/json' },
+                                                  body: JSON.stringify({ series: groupSeries }),
+                                                });
+                                                const data = await res.json();
+                                                if (res.ok && data.note) {
+                                                  setNoteInputs(prev => ({ ...prev, [group.id]: data.note }));
+                                                } else {
+                                                  alert('No se pudo generar la sugerencia: ' + (data.error ?? 'Error desconocido'));
+                                                }
+                                              } catch (e: any) {
+                                                alert('Error: ' + e.message);
+                                              } finally {
+                                                setAiLoadingId(null);
+                                              }
+                                            }}
+                                            disabled={aiLoadingId === group.id}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px', borderRadius: '7px', background: 'linear-gradient(135deg,rgba(139,92,246,0.2),rgba(59,130,246,0.15))', border: '1px solid rgba(139,92,246,0.3)', color: '#a78bfa', cursor: aiLoadingId === group.id ? 'default' : 'pointer', fontSize: '11px', fontWeight: 700, fontFamily: 'var(--font-main)', whiteSpace: 'nowrap' }}
+                                          >
+                                            {aiLoadingId === group.id
+                                              ? <><Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> Generando...</>
+                                              : noteInputs[group.id] || group.doctorNote
+                                                ? <><RefreshCw size={11} /> Regenerar sugerencia IA</>
+                                                : <><Sparkles size={11} /> Sugerencia IA</>}
+                                          </button>
+                                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
+                                            {(noteInputs[group.id] ?? group.doctorNote ?? '').length}/1200
+                                          </span>
+                                        </div>
                                         <textarea
                                           value={noteInputs[group.id] ?? group.doctorNote ?? ''}
                                           onChange={e => setNoteInputs(prev => ({ ...prev, [group.id]: e.target.value }))}
-                                          placeholder="Escribe una anotación clínica sobre esta comparativa..."
+                                          placeholder="Escribe una anotación clínica sobre esta comparativa, o usa el botón ✨ Sugerencia IA..."
                                           style={{ width: '100%', minHeight: '90px', padding: '12px 14px', background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '10px', color: '#fff', fontSize: '13px', lineHeight: 1.7, fontFamily: 'var(--font-main)', resize: 'vertical', outline: 'none', boxSizing: 'border-box' }}
                                           maxLength={1200}
                                           autoFocus
                                         />
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>
-                                            {(noteInputs[group.id] ?? group.doctorNote ?? '').length}/1200
-                                          </span>
-                                          <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button
-                                              onClick={() => setEditingNoteId(null)}
-                                              style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}
-                                            >
-                                              Cancelar
-                                            </button>
-                                            <button
-                                              onClick={async () => {
-                                                setSavingNoteId(group.id);
-                                                const newNote = noteInputs[group.id] ?? group.doctorNote ?? '';
-                                                await updateComparativeGroupNote(id, group.id, newNote);
-                                                setM6Groups(prev => prev.map(g => g.id === group.id ? { ...g, doctorNote: newNote.trim() || undefined } : g));
-                                                setEditingNoteId(null);
-                                                setSavingNoteId(null);
-                                              }}
-                                              disabled={savingNoteId === group.id}
-                                              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 16px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: savingNoteId === group.id ? 'default' : 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
-                                            >
-                                              {savingNoteId === group.id ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />}
-                                              Guardar nota
-                                            </button>
-                                          </div>
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                                          <button
+                                            onClick={() => setEditingNoteId(null)}
+                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}
+                                          >
+                                            Cancelar
+                                          </button>
+                                          <button
+                                            onClick={async () => {
+                                              setSavingNoteId(group.id);
+                                              const newNote = noteInputs[group.id] ?? group.doctorNote ?? '';
+                                              await updateComparativeGroupNote(id, group.id, newNote);
+                                              setM6Groups(prev => prev.map(g => g.id === group.id ? { ...g, doctorNote: newNote.trim() || undefined } : g));
+                                              setEditingNoteId(null);
+                                              setSavingNoteId(null);
+                                            }}
+                                            disabled={savingNoteId === group.id}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 16px', borderRadius: '8px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: savingNoteId === group.id ? 'default' : 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)' }}
+                                          >
+                                            {savingNoteId === group.id ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />}
+                                            Guardar nota
+                                          </button>
                                         </div>
                                       </div>
                                     ) : (
