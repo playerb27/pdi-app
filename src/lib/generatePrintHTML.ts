@@ -629,18 +629,49 @@ export function generatePrintHTML(
     .m2-interp { font-size: 12px; color: #374151; background: #f9f7f0; border: 1px solid #fcd34d; border-radius: 8px; padding: 10px 14px; margin: 10px 0; line-height: 1.6; }
     .m2-alert { font-size: 12px; color: #dc2626; background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; padding: 8px 14px; margin-top: 8px; font-weight: 600; }
 
-    /* ── Page header/footer (print only) ── */
+    /* ── Page break control — prevents sections from splitting mid-content ── */
+
+    /* Every callout block, table, and list item stays intact across pages */
+    .module-body > div,
+    .module-body > blockquote,
+    .module-body > ul,
+    .module-body > ol,
+    .module-body table,
+    .module-body tr,
+    .m2-system,
+    .m2-hero-card {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    /* Headings always stay with the content that follows them */
+    .module-body h2,
+    .module-body h3,
+    .module-body h4 {
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+
+    /* Prevent lone lines at top/bottom of pages */
+    .module-body p,
+    .module-body li {
+      orphans: 3;
+      widows: 3;
+    }
+
+    /* ── Print overrides ── */
     @page {
       margin: 15mm 20mm;
       size: A4;
     }
 
-    /* ── Print overrides ── */
     @media print {
       .cover { min-height: 100vh; }
       .no-print { display: none !important; }
       .module-section { padding: 32px 40px; }
     }
+
+
   </style>
 </head>
 <body>

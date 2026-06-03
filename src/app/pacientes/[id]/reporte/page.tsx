@@ -14,6 +14,7 @@ import {
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
 import ModuleContentRenderer from '@/components/ModuleContentRenderer';
+import RichTextEditor from '@/components/RichTextEditor';
 import { generatePrintHTML, svgForSeries, buildSeriesForPrint, type AiNoteForPrint } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
@@ -788,7 +789,14 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                           const viewContent = mod.content;
                           const editVal = editContent[def.num] ?? mod.content;
                           if (isEditing && isM2Json) return (<div style={{ background: '#0c0c14' }}><Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} /></div>);
-                          if (isEditing) return (<textarea value={editVal} onChange={e => setEditContent(prev => ({ ...prev, [def.num]: e.target.value }))} style={{ width: '100%', minHeight: '400px', padding: '24px', background: 'var(--bg-main)', color: 'var(--text-primary)', border: 'none', outline: 'none', fontFamily: 'monospace', fontSize: '13px', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box' }} />);
+                          if (isEditing) return (
+                            <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden', margin: '0' }}>
+                              <RichTextEditor
+                                content={editVal}
+                                onChange={newMd => setEditContent(prev => ({ ...prev, [def.num]: newMd }))}
+                              />
+                            </div>
+                          );
                           if (isM2Json) return (<div style={{ background: '#0a0a12' }}><Module2Renderer content={viewContent} /></div>);
                           return (<div style={{ padding: '24px 32px' }}><ModuleContentRenderer content={viewContent} /></div>);
                         })()}
