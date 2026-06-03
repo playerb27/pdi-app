@@ -221,7 +221,8 @@ interface RichTextEditorProps {
 
 export default function RichTextEditor({ content, onChange, pageHeightPx = 1122 }: RichTextEditorProps) {
   const initialHtml = useRef(mdToHtml(content));
-  const suppressChange = useRef(false);
+  // Track the last markdown WE emitted so we can ignore the echo-back from the parent
+  const lastEmittedMd = useRef(content);
 
   const editor = useEditor({
     extensions: [
@@ -237,9 +238,10 @@ export default function RichTextEditor({ content, onChange, pageHeightPx = 1122 
     ],
     content: initialHtml.current,
     onUpdate({ editor: e }) {
-      if (suppressChange.current) return;
       const html = e.getHTML();
-      onChange(htmlToMd(html));
+      const md = htmlToMd(html);
+      lastEmittedMd.current = md;   // remember what we sent out
+      onChange(md);
     },
     editorProps: {
       attributes: {
@@ -249,15 +251,14 @@ export default function RichTextEditor({ content, onChange, pageHeightPx = 1122 
     },
   });
 
-  // If parent pushes new content (e.g. regenerate), update editor without loop
+  // Only update the editor when the content changed EXTERNALLY (e.g. Regenerar button)
+  // — not when the parent echoed back what we just typed
   useEffect(() => {
     if (!editor) return;
+    if (content === lastEmittedMd.current) return; // came from us, skip
     const newHtml = mdToHtml(content);
-    if (newHtml !== editor.getHTML()) {
-      suppressChange.current = true;
-      editor.commands.setContent(newHtml, { emitUpdate: false });
-      suppressChange.current = false;
-    }
+    editor.commands.setContent(newHtml, { emitUpdate: false });
+    lastEmittedMd.current = content;
   }, [content, editor]);
 
   if (!editor) return null;
