@@ -33,6 +33,7 @@ interface Props {
   onToggleCompare?: (name: string) => void;
   onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
   showOnlySuspicious?: boolean;
+  showOnlyOutOfRange?: boolean;
   onSeriesReady?: (map: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; isEdited?: boolean; originalValue?: string | null }[] }>) => void;
   documents?: any[];
 }
@@ -215,7 +216,7 @@ function BiomarkerSparkline({
   );
 }
 
-export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, onSeriesReady, documents }: Props) {
+export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, showOnlyOutOfRange, onSeriesReady, documents }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
 
@@ -365,12 +366,28 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
 
   const allSeries = Object.values(displaySeriesMap);
   const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);
+  const hasOutOfRange = (s: BiomarkerTimeSeries) => s.points.some(p => p.flag !== 'Normal' && !p.suspicious);
+  const hasAnyAbnormal = (s: BiomarkerTimeSeries) => s.points.some(p => p.flag !== 'Normal');
   const multiPointSeries = allSeries.filter(s => s.points.length >= 2);
   const singlePointSeries = allSeries.filter(s => s.points.length === 1);
   const systems = [...new Set(allSeries.map(s => s.system))];
 
-  const baseMulti = showOnlySuspicious ? multiPointSeries.filter(hasSuspicious) : multiPointSeries;
-  const baseSingle = showOnlySuspicious ? singlePointSeries.filter(hasSuspicious) : singlePointSeries;
+  // Apply active filter
+  const applyFilter = (list: BiomarkerTimeSeries[]) => {
+    if (showOnlySuspicious) return list.filter(hasSuspicious);
+    if (showOnlyOutOfRange) {
+      // Keep markers with any abnormal value; sort out-of-range ones first
+      const filtered = list.filter(hasAnyAbnormal);
+      return [
+        ...filtered.filter(s => !hasSuspicious(s)), // true out-of-range first
+        ...filtered.filter(s => hasSuspicious(s)),  // then suspicious ones
+      ];
+    }
+    return list;
+  };
+
+  const baseMulti = applyFilter(multiPointSeries);
+  const baseSingle = applyFilter(singlePointSeries);
   const filteredMulti = selectedSystem ? baseMulti.filter(s => s.system === selectedSystem) : baseMulti;
   const filteredSingle = selectedSystem ? baseSingle.filter(s => s.system === selectedSystem) : baseSingle;
   const groupBySys = (list: BiomarkerTimeSeries[]) => list.reduce((acc, s) => { if (!acc[s.system]) acc[s.system] = []; acc[s.system].push(s); return acc; }, {} as Record<string, BiomarkerTimeSeries[]>);

@@ -9,7 +9,7 @@ import {
   getPatientById, getStudiesWithBiomarkers, getInterviewAnswers,
   getReportModules, upsertReportModule, deleteReportModules,
   Patient, Study, ReportModule, getComparativeGroups, removeComparativeGroup, clearComparativeGroups,
-  updateComparativeGroupNote, type ComparativeGroup
+  updateComparativeGroupNote, type ComparativeGroup, getAiNotes, deleteAiNote, type AiNote
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
@@ -53,67 +53,91 @@ const MODULE_DEFS = [
 ];
 
 // ─── Rich Markdown renderer ──────────────────────────────────────────────────
+// Publication-quality renderer. Handles patterns Gemini generates for medical reports.
 function renderMarkdown(text: string): string {
-  // ── 1. Tables ────────────────────────────────────────────────────────────────
-  // Match GFM tables: header row | separator row | data rows
+  text = text.replace(/\r\n/g, '\n').trim();
+
+  // Tables
   text = text.replace(
     /^(\|.+\|)\n\|[-:| ]+\|\n((?:\|.+\|\n?)*)/gm,
     (_, header, body) => {
-      const parseRow = (row: string) =>
-        row.trim().slice(1, -1).split('|').map(c => c.trim());
-      const headers = parseRow(header)
-        .map(h => `<th style="padding:8px 14px;text-align:left;font-size:12px;font-weight:700;color:var(--gold-primary);border-bottom:1px solid rgba(212,175,55,0.3);white-space:nowrap">${h}</th>`)
-        .join('');
-      const rows = body.trim().split('\n')
-        .filter(Boolean)
-        .map((r: string) => {
-          const cells = parseRow(r)
-            .map(c => `<td style="padding:7px 14px;font-size:13px;color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.04)">${c}</td>`)
-            .join('');
-          return `<tr>${cells}</tr>`;
-        }).join('');
-      return `<div style="overflow-x:auto;margin:12px 0"><table style="width:100%;border-collapse:collapse;background:rgba(255,255,255,0.02);border-radius:8px;overflow:hidden"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
+      const parseRow = (row: string) => row.trim().slice(1, -1).split('|').map(c => c.trim());
+      const headers = parseRow(header).map(h => `<th style="padding:10px 16px;text-align:left;font-size:12px;font-weight:700;color:var(--gold-primary);border-bottom:2px solid rgba(212,175,55,0.3);white-space:nowrap">${h}</th>`).join('');
+      const rows = body.trim().split('\n').filter(Boolean).map((r: string, ri: number) => {
+        const cells = parseRow(r).map(c => `<td style="padding:9px 16px;font-size:13px;color:var(--text-secondary);border-bottom:1px solid rgba(255,255,255,0.04);line-height:1.6">${c}</td>`).join('');
+        return `<tr style="background:${ri % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)'}">${cells}</tr>`;
+      }).join('');
+      return `<div style="overflow-x:auto;margin:16px 0;border-radius:10px;border:1px solid rgba(255,255,255,0.07)"><table style="width:100%;border-collapse:collapse"><thead style="background:rgba(212,175,55,0.05)"><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div>`;
     }
   );
 
-  // ── 2. Blockquote callouts (> text) ─────────────────────────────────────────
+  // Blockquotes
+  text = text.replace(/^(> .+(?:\n> .+)*)/gm, match => {
+    const content = match.replace(/^> /gm, '');
+    return `<div style="margin:16px 0;padding:12px 18px;border-left:3px solid var(--gold-primary);background:rgba(212,175,55,0.05);border-radius:0 8px 8px 0;font-size:14px;color:var(--text-secondary);line-height:1.7;font-style:italic">${content}</div>`;
+  });
+
+  // Horizontal rules
+  text = text.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.07);margin:28px 0">');
+
+  // Headings
+  text = text
+    .replace(/^# (.+)$/gm, '<h1 style="font-size:22px;font-weight:800;margin:36px 0 14px;color:var(--text-primary)">$1</h1>')
+    .replace(/^## (.+)$/gm, '<h2 style="font-size:18px;font-weight:700;margin:30px 0 12px;color:var(--text-primary);padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,0.08)">$1</h2>')
+    .replace(/^### (.+)$/gm, '<h3 style="font-size:15px;font-weight:700;margin:22px 0 8px;color:var(--gold-primary)">$1</h3>')
+    .replace(/^#### (.+)$/gm, '<h4 style="font-size:12px;font-weight:700;margin:16px 0 6px;color:rgba(212,175,55,0.7);text-transform:uppercase;letter-spacing:0.08em">$1</h4>');
+
+  // Bold — must happen BEFORE list processing
+  text = text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong style="color:var(--text-primary);font-weight:700">$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary);font-weight:700">$1</strong>');
+
+  // Inline code
+  text = text.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace;color:#a78bfa">$1</code>');
+
+  // Lists — handle ALL patterns the AI generates:
+  // * <strong>Label</strong>: description  →  labeled list item
   text = text.replace(
-    /^(> .+(?:\n> .+)*)/gm,
-    match => {
-      const content = match.replace(/^> /gm, '');
-      return `<div style="margin:10px 0;padding:10px 14px;border-left:3px solid var(--gold-primary);background:rgba(212,175,55,0.06);border-radius:0 6px 6px 0;font-size:13px;color:var(--text-secondary);line-height:1.6">${content}</div>`;
-    }
+    /^\* (<strong[^>]*>[^<]*<\/strong>):?\s*(.*)/gm,
+    '<li style="margin:0;padding:9px 0;line-height:1.8;list-style:none;display:flex;gap:10px;align-items:flex-start"><span style="color:var(--gold-primary);flex-shrink:0;margin-top:2px">›</span><span>$1 $2</span></li>'
   );
+  // * plain text  →  bullet
+  text = text.replace(
+    /^\* (.+)$/gm,
+    '<li style="margin:0;padding:7px 0;line-height:1.8;list-style:none;display:flex;gap:10px;align-items:flex-start"><span style="color:var(--gold-primary);flex-shrink:0;font-size:9px;margin-top:6px">●</span><span>$1</span></li>'
+  );
+  // - text  →  bullet
+  text = text.replace(
+    /^- (.+)$/gm,
+    '<li style="margin:0;padding:7px 0;line-height:1.8;list-style:none;display:flex;gap:10px;align-items:flex-start"><span style="color:rgba(212,175,55,0.5);flex-shrink:0;font-size:9px;margin-top:6px">●</span><span>$1</span></li>'
+  );
+  // 1. numbered  →  numbered item
+  text = text.replace(
+    /^(\d+)\. (.+)$/gm,
+    '<li style="margin:0;padding:7px 0;line-height:1.8;list-style:none;display:flex;gap:10px;align-items:flex-start"><span style="color:var(--gold-primary);font-weight:700;font-size:12px;min-width:20px;flex-shrink:0;margin-top:3px">$1.</span><span>$2</span></li>'
+  );
+  // Wrap consecutive li elements
+  text = text.replace(/(<li[^>]*>[\s\S]*?<\/li>\n?)+/g, s => `<ul style="margin:10px 0 16px;padding:0 0 0 6px;border-left:2px solid rgba(212,175,55,0.18)">${s}</ul>`);
 
-  // ── 3. Horizontal rules ──────────────────────────────────────────────────────
-  text = text.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.07);margin:20px 0">');
+  // Paragraphs — split on double newlines, wrap non-HTML in <p>
+  const blocks = text.split(/\n\n+/);
+  text = blocks.map(block => {
+    const trimmed = block.trim();
+    if (!trimmed) return '';
+    if (/^<(h[1-6]|ul|ol|div|table|hr|blockquote)/.test(trimmed)) return trimmed;
+    return `<p style="margin:0 0 16px;line-height:1.85;color:var(--text-secondary);font-size:14px">${trimmed.replace(/\n/g, '<br>')}</p>`;
+  }).join('\n');
 
-  // ── 4. Headings ─────────────────────────────────────────────────────────────
-  text = text
-    .replace(/^## (.+)$/gm, '<h2 style="font-size:17px;font-weight:700;margin:28px 0 10px;color:var(--text-primary);padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.07)">$1</h2>')
-    .replace(/^### (.+)$/gm, '<h3 style="font-size:14px;font-weight:600;margin:16px 0 6px;color:var(--gold-primary)">$1</h3>');
-
-  // ── 5. Inline formatting ────────────────────────────────────────────────────
-  text = text
-    .replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--text-primary);font-weight:600">$1</strong>')
-    .replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-size:12px;font-family:monospace">$1</code>');
-
-  // ── 6. Lists ─────────────────────────────────────────────────────────────────
-  text = text
-    .replace(/^- (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;line-height:1.65">$1</li>')
-    .replace(/(<li.*<\/li>\n?)+/g, s => `<ul style="padding-left:20px;margin:8px 0">${s}</ul>`);
-
-  // ── 7. Paragraphs ────────────────────────────────────────────────────────────
-  text = text.replace(/\n\n/g, '<br/><br/>');
-
-  // ── 8. Status emojis ─────────────────────────────────────────────────────────
+  // Status emojis
   text = text
     .replace(/🔴/g, '<span style="color:#ef4444">🔴</span>')
     .replace(/🟡/g, '<span style="color:#f59e0b">🟡</span>')
     .replace(/🟢/g, '<span style="color:#22c55e">🟢</span>')
     .replace(/⚡/g, '<span style="color:#f59e0b">⚡</span>')
     .replace(/✅/g, '<span style="color:#22c55e">✅</span>')
-    .replace(/⚠️/g, '<span style="color:#f59e0b">⚠️</span>');
+    .replace(/⚠️/g, '<span style="color:#f59e0b">⚠️</span>')
+    .replace(/🔸/g, '<span style="color:#f97316">🔸</span>')
+    .replace(/🔹/g, '<span style="color:#3b82f6">🔹</span>');
 
   return text;
 }
@@ -143,6 +167,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
 
   const [showResetModal, setShowResetModal] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
+  const [aiNotes, setAiNotes] = useState<AiNote[]>([]);
 
   const handleResetReport = async () => {
     try {
@@ -161,6 +186,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   useEffect(() => {
     if (!id) return;
     getComparativeGroups(id).then(groups => setM6Groups(groups));
+    getAiNotes(id).then(notes => setAiNotes(notes));
   }, [id]);
 
   // Build a ChartSeries from allStudies for a given canonical marker name,
@@ -773,6 +799,59 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
               </div>
             );
           })}
+
+          {/* ── Anotaciones de IA ── */}
+          {aiNotes.length > 0 && (
+            <div style={{ marginBottom: '16px', borderRadius: '14px', border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.03)', overflow: 'hidden' }}>
+              {/* Header */}
+              <div style={{ padding: '20px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(139,92,246,0.15)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>🤖</div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '3px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', padding: '2px 8px', borderRadius: '99px' }}>ANOTACIONES IA</span>
+                      <span style={{ fontSize: '11px', color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} /> Guardadas</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>Análisis del Asistente Clínico</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{aiNotes.length} anotación{aiNotes.length !== 1 ? 'es' : ''} guardada{aiNotes.length !== 1 ? 's' : ''} desde la Consulta IA</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Notes list */}
+              <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {aiNotes.map((note, ni) => (
+                  <div key={note.id} style={{ borderRadius: '12px', border: '1px solid rgba(139,92,246,0.15)', background: 'rgba(255,255,255,0.015)', overflow: 'hidden' }}>
+                    {/* Question */}
+                    <div style={{ padding: '10px 16px', background: 'rgba(139,92,246,0.06)', borderBottom: '1px solid rgba(139,92,246,0.1)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1, minWidth: 0 }}>
+                        <span style={{ fontSize: '13px', color: '#a78bfa', flexShrink: 0, marginTop: '1px' }}>👤</span>
+                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5, fontStyle: 'italic' }}>{note.question || 'Consulta clínica'}</p>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                          {new Date(note.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            await deleteAiNote(id, note.id);
+                            setAiNotes(prev => prev.filter(n => n.id !== note.id));
+                          }}
+                          style={{ padding: '2px 6px', borderRadius: '5px', background: 'transparent', border: '1px solid rgba(239,68,68,0.2)', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', fontSize: '10px', lineHeight: 1 }}
+                          title="Eliminar anotación"
+                        >×</button>
+                      </div>
+                    </div>
+                    {/* Answer */}
+                    <div
+                      style={{ padding: '14px 20px', fontSize: '14px', lineHeight: 1.8, color: 'var(--text-secondary)' }}
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(note.answer) }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Final CTA */}
           {allApproved && (

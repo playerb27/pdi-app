@@ -2,13 +2,49 @@
 import { useState, useEffect, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, UploadCloud, BrainCircuit, Activity, ChevronDown, ChevronRight, Edit2, X, RotateCcw, MessageSquare, Bot, Send, Loader2, GitCompare, FolderOpen, FileText, Trash2, Eye, Search, Paperclip, RefreshCw } from 'lucide-react';
-import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, getCanonicalBuildStatus, Patient, Study } from '@/lib/api';
+import { getPatientById, updatePatient, createStudy, createBiomarkers, deleteBiomarkersForStudy, getStudiesWithBiomarkers, deleteStudy, updateBiomarker, getInterviewAnswers, getReportModules, saveComparativeMarkers, getCanonicalBuildStatus, saveAiNote, Patient, Study, AiNote } from '@/lib/api';
 import { TOTAL_QUESTIONS, ALL_SECTIONS, HIDDEN_QUESTION_IDS } from '@/lib/questionnaire-data-ext';
 import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
 import BiomarkerMasterTable from '@/components/BiomarkerMasterTable';
 import { normalizeBiomarkerName, studyBiomarkerElementId, chartBiomarkerElementId, tablaBiomarkerElementId } from '@/lib/biomarkers';
 
+
+// ─── Clean markdown renderer for chat messages ───────────────────────────────
+// Renders markdown without showing raw symbols like **, ###, * to the user.
+function renderChatMarkdown(text: string): string {
+  // Bold: **text** → <strong>
+  let html = text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong>$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Headers: ### text → section heading
+  html = html
+    .replace(/^#### (.+)$/gm, '<p style="font-size:12px;font-weight:700;color:rgba(212,175,55,0.8);text-transform:uppercase;letter-spacing:0.06em;margin:16px 0 4px">$1</p>')
+    .replace(/^### (.+)$/gm, '<p style="font-size:13px;font-weight:700;color:var(--gold-primary);margin:18px 0 6px;padding-bottom:4px;border-bottom:1px solid rgba(212,175,55,0.15)">$1</p>')
+    .replace(/^## (.+)$/gm, '<p style="font-size:15px;font-weight:700;color:var(--text-primary);margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08)">$1</p>')
+    .replace(/^# (.+)$/gm, '<p style="font-size:16px;font-weight:800;color:var(--text-primary);margin:24px 0 10px">$1</p>');
+
+  // Bullet lists: * item or - item
+  html = html.replace(/^[\*\-] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, s =>
+    `<ul style="padding-left:18px;margin:8px 0;display:flex;flex-direction:column;gap:4px">${s}</ul>`
+  );
+
+  // Numbered lists: 1. item
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.07);margin:16px 0">');
+
+  // Paragraphs: double newlines become spacing
+  html = html.replace(/\n\n/g, '<br style="display:block;margin-bottom:6px">');
+
+  // Single newlines inside non-block content become line breaks
+  html = html.replace(/\n(?!<)/g, '<br>');
+
+  return html;
+}
 
 // ─── Índice Maestro PDI ───────────────────────────────────────────────────────
 const MASTER_INDEX = [
@@ -91,6 +127,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const [savingNoteIdx, setSavingNoteIdx] = useState<number | null>(null);
+  const [savedNoteIdxs, setSavedNoteIdxs] = useState<Set<number>>(new Set());
 
   // Smart search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -113,7 +151,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [bmFilter, setBmFilter] = useState<'all' | 'altered' | 'edited' | 'suspicious'>('all');
   const [viewMode, setViewMode] = useState<'systems' | 'original'>('systems');
-  const [showOnlySuspiciousCharts, setShowOnlySuspiciousCharts] = useState(false);
+  const [chartFilter, setChartFilter] = useState<'all' | 'suspicious' | 'out-of-range'>('all');
 
   const showError = (msg: string) => {
     setErrorToast(msg);
@@ -1431,19 +1469,26 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Filtrar gráficas:</span>
-                    <button onClick={() => setShowOnlySuspiciousCharts(false)} style={{
+                    <button onClick={() => setChartFilter('all')} style={{
                       padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
                       fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
-                      border: `1px solid ${!showOnlySuspiciousCharts ? 'var(--text-secondary)' : 'var(--border-subtle)'}`,
-                      background: !showOnlySuspiciousCharts ? 'rgba(255,255,255,0.06)' : 'transparent',
-                      color: !showOnlySuspiciousCharts ? 'var(--text-secondary)' : 'var(--text-muted)',
+                      border: `1px solid ${chartFilter === 'all' ? 'var(--text-secondary)' : 'var(--border-subtle)'}`,
+                      background: chartFilter === 'all' ? 'rgba(255,255,255,0.06)' : 'transparent',
+                      color: chartFilter === 'all' ? 'var(--text-secondary)' : 'var(--text-muted)',
                     }}>Todas las gráficas</button>
-                    <button onClick={() => setShowOnlySuspiciousCharts(true)} style={{
+                    <button onClick={() => setChartFilter(chartFilter === 'out-of-range' ? 'all' : 'out-of-range')} style={{
                       padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
                       fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
-                      border: `1px solid ${showOnlySuspiciousCharts ? '#f97316' : 'var(--border-subtle)'}`,
-                      background: showOnlySuspiciousCharts ? 'rgba(249,115,22,0.12)' : 'transparent',
-                      color: showOnlySuspiciousCharts ? '#f97316' : 'var(--text-muted)',
+                      border: `1px solid ${chartFilter === 'out-of-range' ? '#ef4444' : 'var(--border-subtle)'}`,
+                      background: chartFilter === 'out-of-range' ? 'rgba(239,68,68,0.12)' : 'transparent',
+                      color: chartFilter === 'out-of-range' ? '#ef4444' : 'var(--text-muted)',
+                    }}>🔴 Solo fuera de rango</button>
+                    <button onClick={() => setChartFilter(chartFilter === 'suspicious' ? 'all' : 'suspicious')} style={{
+                      padding: '5px 14px', borderRadius: '99px', fontSize: '12px', fontWeight: 700,
+                      fontFamily: 'var(--font-main)', cursor: 'pointer', transition: 'all 0.15s',
+                      border: `1px solid ${chartFilter === 'suspicious' ? '#f97316' : 'var(--border-subtle)'}`,
+                      background: chartFilter === 'suspicious' ? 'rgba(249,115,22,0.12)' : 'transparent',
+                      color: chartFilter === 'suspicious' ? '#f97316' : 'var(--text-muted)',
                     }}>◇ Solo con valores sospechosos</button>
                   </div>
                   <EvolutionCharts
@@ -1453,7 +1498,8 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                     compareMode={isCompareMode}
                     selectedForCompare={selectedForCompare}
                     onToggleCompare={toggleSelectForCompare}
-                    showOnlySuspicious={showOnlySuspiciousCharts}
+                    showOnlySuspicious={chartFilter === 'suspicious'}
+                    showOnlyOutOfRange={chartFilter === 'out-of-range'}
                     onSeriesReady={setReadySeriesMap}
                     documents={documents}
                     onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
@@ -1518,19 +1564,45 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {chatHistory.map((msg, i) => (
+                  {chatHistory.map((msg, i) => {
+                    // Find the user message just before this model message
+                    const prevUserMsg = msg.role === 'model'
+                      ? chatHistory.slice(0, i).filter(m => m.role === 'user').slice(-1)[0]?.text ?? ''
+                      : '';
+                    return (
                     <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
                       <div style={{ width: '32px', height: '32px', borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: msg.role === 'user' ? 'var(--gold-primary)' : 'rgba(212,175,55,0.1)', border: msg.role === 'model' ? '1px solid rgba(212,175,55,0.3)' : 'none' }}>
                         {msg.role === 'user' ? <span style={{ fontSize: '14px' }}>👤</span> : <Bot size={16} color="var(--gold-primary)" />}
                       </div>
                       <div style={{ flex: 1, maxWidth: '85%' }}>
-                        <div style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.7, backgroundColor: msg.role === 'user' ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', border: `1px solid ${msg.role === 'user' ? 'rgba(212,175,55,0.2)' : 'var(--border-subtle)'}`, color: 'var(--text-primary)' }}>
-                          {msg.text.split('\n').filter(l => l.trim()).map((line, j) => <p key={j} style={{ margin: '0 0 6px 0' }}>{line}</p>)}
+                        <div
+                          style={{ padding: '12px 16px', borderRadius: '12px', fontSize: '14px', lineHeight: 1.75, backgroundColor: msg.role === 'user' ? 'rgba(212,175,55,0.08)' : 'var(--bg-main)', border: `1px solid ${msg.role === 'user' ? 'rgba(212,175,55,0.2)' : 'var(--border-subtle)'}`, color: 'var(--text-primary)' }}
+                          dangerouslySetInnerHTML={msg.role === 'model' ? { __html: renderChatMarkdown(msg.text) } : undefined}
+                        >
+                          {msg.role === 'user' ? msg.text : null}
                         </div>
-                        {msg.timestamp && <p style={{ margin: '4px 0 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
+                          {msg.timestamp && <p style={{ margin: 0, fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
+                          {msg.role === 'model' && (
+                            <button
+                              onClick={async () => {
+                                setSavingNoteIdx(i);
+                                await saveAiNote(id, prevUserMsg, msg.text);
+                                setSavedNoteIdxs(prev => new Set(prev).add(i));
+                                setSavingNoteIdx(null);
+                              }}
+                              disabled={savingNoteIdx === i || savedNoteIdxs.has(i)}
+                              style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, fontFamily: 'var(--font-main)', cursor: savingNoteIdx === i || savedNoteIdxs.has(i) ? 'default' : 'pointer', border: `1px solid ${savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.4)' : 'rgba(212,175,55,0.3)'}`, background: savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.08)' : 'rgba(212,175,55,0.06)', color: savedNoteIdxs.has(i) ? '#22c55e' : 'var(--gold-primary)', transition: 'all 0.2s' }}
+                            >
+                              {savingNoteIdx === i ? <Loader2 size={9} style={{ animation: 'spin 1s linear infinite' }} /> : savedNoteIdxs.has(i) ? '✓' : '+'}
+                              {savedNoteIdxs.has(i) ? 'Guardado en reporte' : 'Agregar al reporte'}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   <div ref={chatEndRef} />
                 </div>
               )}
@@ -2283,20 +2355,44 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                 <span style={{ fontSize: '14px' }}>¿Qué deseas consultar?</span>
               </div>
             )}
-            {chatHistory.map((msg, i) => (
+            {chatHistory.map((msg, i) => {
+              const prevUserMsg = msg.role === 'model'
+                ? chatHistory.slice(0, i).filter(m => m.role === 'user').slice(-1)[0]?.text ?? ''
+                : '';
+              return (
               <div key={i} style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '88%' }}>
                 <div style={{
-                  padding: '14px 18px', borderRadius: '14px', fontSize: '15px', lineHeight: 1.65,
+                  padding: '14px 18px', borderRadius: '14px', fontSize: '14px', lineHeight: 1.75,
                   backgroundColor: msg.role === 'user' ? 'var(--gold-primary)' : 'var(--bg-main)',
                   color: msg.role === 'user' ? '#000' : 'var(--text-primary)',
                   borderBottomRightRadius: msg.role === 'user' ? '4px' : '14px',
                   borderBottomLeftRadius: msg.role === 'model' ? '4px' : '14px',
-                }}>
-                  {msg.text.split('\n').map((line, j) => line.trim() ? <p key={j} style={{ margin: '0 0 8px 0' }}>{line}</p> : null)}
+                }}
+                  dangerouslySetInnerHTML={msg.role === 'model' ? { __html: renderChatMarkdown(msg.text) } : undefined}
+                >
+                  {msg.role === 'user' ? msg.text : null}
                 </div>
-                {msg.timestamp && <p style={{ margin: '4px 4px 0', fontSize: '10px', color: 'var(--text-muted)', textAlign: msg.role === 'user' ? 'right' : 'left' }}>{msg.timestamp}</p>}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: msg.role === 'user' ? 'flex-end' : 'space-between', gap: '8px', marginTop: '4px', paddingLeft: '2px' }}>
+                  {msg.timestamp && <p style={{ margin: 0, fontSize: '10px', color: 'var(--text-muted)' }}>{msg.timestamp}</p>}
+                  {msg.role === 'model' && (
+                    <button
+                      onClick={async () => {
+                        setSavingNoteIdx(i);
+                        await saveAiNote(id, prevUserMsg, msg.text);
+                        setSavedNoteIdxs(prev => new Set(prev).add(i));
+                        setSavingNoteIdx(null);
+                      }}
+                      disabled={savingNoteIdx === i || savedNoteIdxs.has(i)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, fontFamily: 'var(--font-main)', cursor: savingNoteIdx === i || savedNoteIdxs.has(i) ? 'default' : 'pointer', border: `1px solid ${savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.4)' : 'rgba(212,175,55,0.3)'}`, background: savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.08)' : 'rgba(212,175,55,0.06)', color: savedNoteIdxs.has(i) ? '#22c55e' : 'var(--gold-primary)', transition: 'all 0.2s' }}
+                    >
+                      {savingNoteIdx === i ? <Loader2 size={9} style={{ animation: 'spin 1s linear infinite' }} /> : savedNoteIdxs.has(i) ? '✓' : '+'}
+                      {savedNoteIdxs.has(i) ? 'Guardado en reporte' : 'Agregar al reporte'}
+                    </button>
+                  )}
+                </div>
               </div>
-            ))}
+              );
+            })}
             {isChatLoading && (
               <div style={{ alignSelf: 'flex-start', display: 'flex', gap: '10px', alignItems: 'center', padding: '14px 18px', backgroundColor: 'var(--bg-main)', borderRadius: '14px', borderBottomLeftRadius: '4px' }}>
                 <Loader2 size={18} className="spin" color="var(--gold-primary)" />

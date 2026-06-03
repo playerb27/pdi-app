@@ -12,6 +12,14 @@ export interface Patient {
   created_at: string;
   chat_history?: any[];
   comparative_groups?: any[];
+  ai_notes?: AiNote[];
+}
+
+export interface AiNote {
+  id: string;
+  question: string;
+  answer: string;
+  createdAt: string;
 }
 
 export async function getPatients(): Promise<Patient[]> {
@@ -399,3 +407,34 @@ export async function getComparativeMarkers(patientId: string): Promise<string[]
   return groups.flatMap(g => g.markers);
 }
 export const clearComparativeMarkers = clearComparativeGroups;
+
+// ─── AI Notes (chat annotations saved to report) ──────────────────────────────
+
+export async function getAiNotes(patientId: string): Promise<AiNote[]> {
+  const patient = await getPatientById(patientId);
+  return patient?.ai_notes ?? [];
+}
+
+export async function saveAiNote(patientId: string, question: string, answer: string): Promise<void> {
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing: AiNote[] = patient.ai_notes ?? [];
+  const newNote: AiNote = {
+    id: crypto.randomUUID(),
+    question,
+    answer,
+    createdAt: new Date().toISOString(),
+  };
+  await updatePatient(patientId, { ai_notes: [...existing, newNote] });
+}
+
+export async function deleteAiNote(patientId: string, noteId: string): Promise<void> {
+  const patient = await getPatientById(patientId);
+  if (!patient) return;
+  const existing: AiNote[] = patient.ai_notes ?? [];
+  await updatePatient(patientId, { ai_notes: existing.filter(n => n.id !== noteId) });
+}
+
+export async function clearAiNotes(patientId: string): Promise<void> {
+  await updatePatient(patientId, { ai_notes: [] });
+}
