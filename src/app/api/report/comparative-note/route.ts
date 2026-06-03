@@ -51,27 +51,17 @@ Historial cronológico:
 ${pointsDesc}`;
     }).join('\n\n---\n');
 
+    // Use gemini-2.0-flash: no thinking mode, no token leakage, cheaper and faster
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: { maxOutputTokens: 600, temperature: 0.4 },
+      model: 'gemini-2.0-flash',
+      generationConfig: { maxOutputTokens: 250, temperature: 0.3 },
     });
 
-    const prompt = `Eres un médico especialista en medicina funcional e integrativa. 
-Analiza los siguientes datos de laboratorio de un análisis comparativo longitudinal y redacta UNA nota clínica breve y precisa para incluir en el reporte del paciente.
+    const prompt = `Eres médico especialista. Redacta una nota clínica en español de máximo 3 oraciones sobre estos marcadores de laboratorio. Solo texto corrido, sin markdown, sin encabezados, sin inglés.
 
-INSTRUCCIONES:
-- Escribe en español, en primera persona plural del médico (ej: "Observamos...", "Se aprecia...", "Es notable...")
-- Máximo 3-4 oraciones concisas y directamente clínicas
-- Menciona la tendencia temporal (si sube, baja o se mantiene estable)
-- Señala si algún valor está fuera de rango y su relevancia clínica
-- Incluye una recomendación de seguimiento si corresponde
-- NO incluyas encabezados, bullets ni markdown — solo texto corrido
-- NO uses frases genéricas como "Es importante..." — sé específico con los datos
-
-DATOS DEL ANÁLISIS COMPARATIVO:
 ${dataSummary}
 
-Responde ÚNICAMENTE con el texto de la nota clínica, sin ningún encabezado ni explicación adicional:`;
+Nota clínica:`;
 
     const result = await model.generateContent(prompt);
     const note = result.response.text().trim();
