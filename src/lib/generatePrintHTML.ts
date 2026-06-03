@@ -182,22 +182,16 @@ function mdToHtml(text: string): string {
       return `<div style="margin:5px 0;padding:8px 14px;background:${s.bg};border:1px solid ${s.border};border-radius:7px;display:flex;gap:10px;align-items:flex-start"><span style="font-size:10px;font-weight:800;color:${s.color};text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;margin-top:2px">${rawLabel}:</span><span style="font-size:12px;color:#374151;line-height:1.7">${body}</span></div>`;
     }
   );
-  // - <strong>Label</strong>: body  — action item as callout (M5 Acción/Urgencia/Justificación)
+  // - <strong>Label</strong>: body — render as clean list item with inline bold label
+  // (NOT as flex callout — labels like "Restricción estricta..." are too long for 2-col layout)
   text = text.replace(
     /^- (<strong[^>]*>([^<]*)<\/strong>):?\s*(.*)/gm,
-    (_, _boldTag, rawLabel, body) => {
-      const key = rawLabel.toLowerCase().trim();
-      const actionColors: Record<string, { bg: string; border: string; color: string }> = {
-        'acción': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
-        'accion': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
-        'urgencia': { bg: '#fef2f2', border: '#fca5a5', color: '#dc2626' },
-        'justificación': { bg: '#fffbeb', border: '#fcd34d', color: '#b45309' },
-        'justificacion': { bg: '#fffbeb', border: '#fcd34d', color: '#b45309' },
-      };
-      const s = actionColors[key] ?? { bg: '#f9fafb', border: '#e5e7eb', color: '#374151' };
-      return `<div style="margin:5px 0;padding:8px 14px;background:${s.bg};border:1px solid ${s.border};border-radius:7px;display:flex;gap:10px;align-items:flex-start"><span style="font-size:10px;font-weight:800;color:${s.color};text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;margin-top:2px">${rawLabel}:</span><span style="font-size:12px;color:#374151;line-height:1.7">${body}</span></div>`;
+    (_, boldTag, _rawLabel, body) => {
+      return `<li style="margin:5px 0;padding-left:4px;color:#374151">${boldTag}: ${body}</li>`;
     }
   );
+
+
 
   // 7. Regular lists
   text = text
