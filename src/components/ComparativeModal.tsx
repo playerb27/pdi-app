@@ -172,6 +172,28 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
 
   const names = localSeries.map(s => s.name);
 
+  // Dynamic example note built from the actual series in this group
+  const buildExampleNote = (): string => {
+    const parts: string[] = [];
+    for (const s of localSeries) {
+      const pts = s.points;
+      if (pts.length === 0) continue;
+      const last = pts[pts.length - 1];
+      const first = pts[0];
+      const trend = pts.length > 1 ? last.value - first.value : 0;
+      const trendWord = trend > 0 ? 'ascendente' : trend < 0 ? 'descendente' : 'estable';
+      const flagWord = last.flag === 'Alto' ? 'por encima del rango normal' : last.flag === 'Bajo' ? 'por debajo del rango normal' : 'dentro del rango normal';
+      if (pts.length === 1) {
+        parts.push(`${s.name} registra ${last.value} ${s.unit}, ${flagWord}.`);
+      } else {
+        parts.push(`${s.name} muestra una tendencia ${trendWord} (${first.value} → ${last.value} ${s.unit}), actualmente ${flagWord}.`);
+      }
+    }
+    if (parts.length === 0) return 'Analice los valores mostrados y anote su interpretación clínica.';
+    const conclusion = 'Se recomienda correlacionar con el cuadro clínico del paciente y definir plan de seguimiento.';
+    return parts.join(' ') + ' ' + conclusion;
+  };
+
   const handleValueUpdated = (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => {
     if (newFlag === 'Excluido') {
       setLocalSeries(prev => prev.map(s => ({
@@ -368,7 +390,7 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
                 <div style={{ marginTop: '8px' }}>
                   <p style={{ margin: '0 0 5px', fontSize: '10px', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>💡 Clic para usar como base:</p>
                   <button
-                    onClick={() => setDoctorNote('La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo.')}
+                    onClick={() => setDoctorNote(buildExampleNote())}
                     style={{
                       width: '100%',
                       textAlign: 'left',
@@ -395,7 +417,7 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
                       (e.currentTarget as HTMLButtonElement).style.color = 'rgba(255,255,255,0.45)';
                     }}
                   >
-                    La albúmina muestra una tendencia descendente que correlaciona con el cuadro inflamatorio crónico. LDH en rango normal, sin evidencia de hemólisis. Se recomienda seguimiento en 3 meses con panel metabólico completo.
+                    {buildExampleNote()}
                   </button>
                 </div>
               )}
