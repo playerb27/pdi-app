@@ -13,7 +13,8 @@ import {
 } from '@/lib/api';
 import Module2Renderer from '@/components/Module2Renderer';
 import Module2Editor from '@/components/Module2Editor';
-import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/generatePrintHTML';
+import ModuleContentRenderer from '@/components/ModuleContentRenderer';
+import { generatePrintHTML, svgForSeries, buildSeriesForPrint, type AiNoteForPrint } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
@@ -330,7 +331,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (!patient) return;
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { alert('Permite ventanas emergentes para generar el PDF.'); return; }
-    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies, biomarkers);
+    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies, biomarkers, aiNotes);
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -789,7 +790,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                           if (isEditing && isM2Json) return (<div style={{ background: '#0c0c14' }}><Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} /></div>);
                           if (isEditing) return (<textarea value={editVal} onChange={e => setEditContent(prev => ({ ...prev, [def.num]: e.target.value }))} style={{ width: '100%', minHeight: '400px', padding: '24px', background: 'var(--bg-main)', color: 'var(--text-primary)', border: 'none', outline: 'none', fontFamily: 'monospace', fontSize: '13px', lineHeight: 1.7, resize: 'vertical', boxSizing: 'border-box' }} />);
                           if (isM2Json) return (<div style={{ background: '#0a0a12' }}><Module2Renderer content={viewContent} /></div>);
-                          return (<div style={{ padding: '28px 36px', lineHeight: 1.8, color: 'var(--text-secondary)', fontSize: '14px' }} dangerouslySetInnerHTML={{ __html: renderMarkdown(editVal) }} />);
+                          return (<div style={{ padding: '24px 32px' }}><ModuleContentRenderer content={viewContent} /></div>);
                         })()}
                       </>
                     )}

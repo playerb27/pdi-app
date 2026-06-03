@@ -4,6 +4,7 @@
 interface ModuleDef { num: number; icon: string; title: string; color: string; }
 interface ReportModule { module_num: number; content: string; status: string; title: string; }
 export interface ComparativeGroupForPrint { id: string; markers: string[]; }
+export interface AiNoteForPrint { id: string; question: string; answer: string; createdAt: string; }
 
 const MODULE_DEFS: ModuleDef[] = [
   { num: 1, icon: '👤', title: 'Perfil Integral del Paciente', color: '#1e40af' },
@@ -104,7 +105,8 @@ export function buildSeriesForPrint(
 }
 
 // Markdown → print HTML (no CSS variables, fully static colors)
-// Supports: tables, blockquote callouts, H2-H4, bold, italic, inline code, lists, HR
+// Supports: tables, blockquote callouts, H1-H4, bold, italic, inline code, lists, HR,
+// labeled bullets (* **Label**: text) and action items (- **Label**: text)
 function mdToHtml(text: string): string {
   // 1. GFM Tables — must run BEFORE paragraph wrapping
   text = text.replace(
@@ -139,22 +141,72 @@ function mdToHtml(text: string): string {
 
   // 4. Headings
   text = text
+    .replace(/^# (.+)$/gm, '<h1 style="font-size:22px;font-weight:800;color:#111827;margin:24px 0 10px">$1</h1>')
     .replace(/^#### (.+)$/gm, '<h4 style="font-size:12px;font-weight:700;color:#374151;margin:14px 0 4px">$1</h4>')
-    .replace(/^### (.+)$/gm, '<h3 style="font-size:14px;font-weight:700;color:#1e40af;margin:18px 0 6px;padding-bottom:3px;border-bottom:1px solid #dbeafe">$1</h3>')
+    .replace(/^### (.+)$/gm, '<div style="margin:18px 0 10px;padding:10px 16px;border-left:4px solid #b8922a;background:#fffbeb;border-radius:0 8px 8px 0"><span style="font-size:14px;font-weight:700;color:#92400e">$1</span></div>')
     .replace(/^## (.+)$/gm, '<h2 style="font-size:17px;font-weight:800;color:#111827;margin:24px 0 10px;padding-bottom:6px;border-bottom:2px solid #e5e7eb">$1</h2>');
 
-  // 5. Inline formatting
+  // 5. Inline formatting (bold BEFORE list processing)
   text = text
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong style="color:#111827;font-weight:700">$1</strong>')
     .replace(/\*\*(.+?)\*\*/g, '<strong style="color:#111827;font-weight:700">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code style="background:#f3f4f6;padding:1px 5px;border-radius:3px;font-size:11px;font-family:monospace">$1</code>');
 
-  // 6. Lists
+  // 6. Labeled bullets: * <strong>Label</strong>: body  (AI's most common pattern in M3/M4)
+  const labelColors: Record<string, { bg: string; border: string; color: string }> = {
+    'síntomas reportados': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    'sintomas reportados': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    'observación médica': { bg: '#f0fdf4', border: '#86efac', color: '#15803d' },
+    'observacion medica': { bg: '#f0fdf4', border: '#86efac', color: '#15803d' },
+    'hallazgos de laboratorio': { bg: '#faf5ff', border: '#d8b4fe', color: '#7c3aed' },
+    'correlación clínica': { bg: '#ecfdf5', border: '#6ee7b7', color: '#065f46' },
+    'correlacion clinica': { bg: '#ecfdf5', border: '#6ee7b7', color: '#065f46' },
+    'nivel de preocupación': { bg: '#fff7ed', border: '#fed7aa', color: '#c2410c' },
+    'nivel de preocupacion': { bg: '#fff7ed', border: '#fed7aa', color: '#c2410c' },
+    'evidencia de laboratorio': { bg: '#faf5ff', border: '#d8b4fe', color: '#7c3aed' },
+    'evolución temporal': { bg: '#ecfdf5', border: '#6ee7b7', color: '#065f46' },
+    'evolucion temporal': { bg: '#ecfdf5', border: '#6ee7b7', color: '#065f46' },
+    'evidencia clínica': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    'evidencia clinica': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+    'probabilidad estimada': { bg: '#fff7ed', border: '#fed7aa', color: '#c2410c' },
+    'criterios diagnósticos': { bg: '#f0fdf4', border: '#86efac', color: '#15803d' },
+    'criterios diagnosticos': { bg: '#f0fdf4', border: '#86efac', color: '#15803d' },
+  };
+  // * <strong>Label</strong>: body  — labeled bullet as callout
+  text = text.replace(
+    /^\* (<strong[^>]*>([^<]*)<\/strong>):?\s*(.*)/gm,
+    (_, _boldTag, rawLabel, body) => {
+      const key = rawLabel.toLowerCase().trim();
+      const s = labelColors[key] ?? { bg: '#f9fafb', border: '#e5e7eb', color: '#374151' };
+      return `<div style="margin:5px 0;padding:8px 14px;background:${s.bg};border:1px solid ${s.border};border-radius:7px;display:flex;gap:10px;align-items:flex-start"><span style="font-size:10px;font-weight:800;color:${s.color};text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;margin-top:2px">${rawLabel}:</span><span style="font-size:12px;color:#374151;line-height:1.7">${body}</span></div>`;
+    }
+  );
+  // - <strong>Label</strong>: body  — action item as callout (M5 Acción/Urgencia/Justificación)
+  text = text.replace(
+    /^- (<strong[^>]*>([^<]*)<\/strong>):?\s*(.*)/gm,
+    (_, _boldTag, rawLabel, body) => {
+      const key = rawLabel.toLowerCase().trim();
+      const actionColors: Record<string, { bg: string; border: string; color: string }> = {
+        'acción': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+        'accion': { bg: '#eff6ff', border: '#bfdbfe', color: '#1d4ed8' },
+        'urgencia': { bg: '#fef2f2', border: '#fca5a5', color: '#dc2626' },
+        'justificación': { bg: '#fffbeb', border: '#fcd34d', color: '#b45309' },
+        'justificacion': { bg: '#fffbeb', border: '#fcd34d', color: '#b45309' },
+      };
+      const s = actionColors[key] ?? { bg: '#f9fafb', border: '#e5e7eb', color: '#374151' };
+      return `<div style="margin:5px 0;padding:8px 14px;background:${s.bg};border:1px solid ${s.border};border-radius:7px;display:flex;gap:10px;align-items:flex-start"><span style="font-size:10px;font-weight:800;color:${s.color};text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap;margin-top:2px">${rawLabel}:</span><span style="font-size:12px;color:#374151;line-height:1.7">${body}</span></div>`;
+    }
+  );
+
+  // 7. Regular lists
   text = text
+    .replace(/^\* (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;color:#374151">$1</li>')
     .replace(/^- (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;color:#374151">$1</li>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li style="margin:4px 0;padding-left:4px;color:#374151"><strong style="color:#b8922a">$1.</strong> $2</li>')
     .replace(/(<li[^>]*>.*<\/li>\n?)+/g, s => `<ul style="padding-left:20px;margin:8px 0">${s}</ul>`);
 
-  // 7. Status badges
+  // 8. Status badges
   text = text
     .replace(/🔴/g, '<span style="color:#dc2626;font-size:11px">🔴</span>')
     .replace(/🟡/g, '<span style="color:#b45309;font-size:11px">🟡</span>')
@@ -167,7 +219,7 @@ function mdToHtml(text: string): string {
     .replace(/⇿/g, '<span style="color:#b45309">⇿</span>')
     .replace(/↔/g, '<span style="color:#6b7280">↔</span>');
 
-  // 8. Paragraphs — only wrap lines that aren't already block elements
+  // 9. Paragraphs — only wrap lines that aren't already block elements
   text = text.replace(/\n\n/g, '\n__PARABREAK__\n');
   text = text.replace(/^(?!<[hud]|__PARABREAK__)(.+)$/gm, (_, line) => line.trim() ? `<p style="margin:6px 0;color:#374151;line-height:1.7">${line}</p>` : '');
   text = text.replace(/__PARABREAK__/g, '<br/>');
@@ -292,6 +344,7 @@ export function generatePrintHTML(
   m6Groups: ComparativeGroupForPrint[] = [],
   allStudies: any[] = [],
   latestBiomarkers: any[] = [],
+  aiNotes: AiNoteForPrint[] = [],
 ): string {
   const patientAge = (() => {
     if (!patient.birth_date) return null;
@@ -470,6 +523,34 @@ export function generatePrintHTML(
     </div>`;
   }
 
+  // ── AI Notes Section ──────────────────────────────────────────────────────────
+  let aiNotesSection = '';
+  if (aiNotes.length > 0) {
+    const noteCards = aiNotes.map(note => `
+      <div style="margin-bottom:16px;border:1px solid #e8e0ff;border-radius:10px;overflow:hidden;page-break-inside:avoid">
+        <div style="padding:10px 16px;background:#f5f3ff;border-bottom:1px solid #e8e0ff;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <span style="font-size:14px;flex-shrink:0">👤</span>
+            <p style="margin:0;font-size:12px;color:#5b21b6;line-height:1.5;font-style:italic">${note.question || 'Consulta clínica'}</p>
+          </div>
+          <span style="font-size:9px;color:#9ca3af;white-space:nowrap;flex-shrink:0">${new Date(note.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+        </div>
+        <div style="padding:14px 18px;font-size:12px;line-height:1.8;color:#374151">${mdToHtml(note.answer)}</div>
+      </div>`);
+
+    aiNotesSection = `
+    <div class="module-section" id="ai-notes" style="page-break-before:always">
+      <div class="module-header" style="border-color:#7c3aed">
+        <span class="module-num" style="background:#6d28d9">IA</span>
+        <h2 class="module-title">🤖 Análisis del Asistente Clínico</h2>
+      </div>
+      <div class="module-body">
+        <p style="margin:0 0 20px;font-size:12px;color:#6b7280;font-style:italic">Las siguientes anotaciones fueron guardadas desde la Consulta IA y forman parte del análisis clínico de este reporte.</p>
+        ${noteCards.join('')}
+      </div>
+    </div>`;
+  }
+
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -586,6 +667,7 @@ export function generatePrintHTML(
   ${moduleSections}
   ${tablaSection}
   ${m6Section}
+  ${aiNotesSection}
 
 </body>
 </html>`;
