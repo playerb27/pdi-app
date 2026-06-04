@@ -1,5 +1,12 @@
 // ─── PDF/Print HTML Generator ──────────────────────────────────────────────────
 // Generates a clean, white, print-optimized HTML document from report modules.
+import { marked } from 'marked';
+
+// Configure marked the same way as the editor for consistent rendering
+marked.setOptions({ gfm: true, breaks: false });
+function markedParse(md: string): string {
+  try { return String(marked.parse(md)); } catch { return `<p>${md}</p>`; }
+}
 
 interface ModuleDef { num: number; icon: string; title: string; color: string; }
 interface ReportModule { module_num: number; content: string; status: string; title: string; }
@@ -357,7 +364,8 @@ export function generatePrintHTML(
   const moduleSections = approvedDefs.map(def => {
     const mod = modules[def.num];
     const isM2Json = def.num === 2 && mod.content.includes('"systems"');
-    const bodyHtml = isM2Json ? m2JsonToHtml(mod.content) : mdToHtml(mod.content);
+    // Use marked.parse() — same engine as the WYSIWYG editor — for pixel-perfect consistency
+    const bodyHtml = isM2Json ? m2JsonToHtml(mod.content) : markedParse(mod.content);
 
     return `
     <div class="module-section" id="module-${def.num}">
@@ -529,7 +537,7 @@ export function generatePrintHTML(
           </div>
           <span style="font-size:9px;color:#9ca3af;white-space:nowrap;flex-shrink:0">${new Date(note.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
         </div>
-        <div style="padding:14px 18px;font-size:12px;line-height:1.8;color:#374151">${mdToHtml(note.answer)}</div>
+        <div style="padding:14px 18px;font-size:12px;line-height:1.8;color:#374151">${markedParse(note.answer)}</div>
       </div>`);
 
     aiNotesSection = `
@@ -595,13 +603,27 @@ export function generatePrintHTML(
     .module-num { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 10px; font-weight: 800; color: white; letter-spacing: 1.5px; margin-bottom: 8px; }
     .module-title { font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 700; color: #1a1a2e; }
 
-    /* ── Body content ── */
-    .module-body h2 { font-size: 17px; font-weight: 700; color: #1a1a2e; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e5e7eb; }
-    .module-body h3 { font-size: 14px; font-weight: 600; color: #374151; margin: 20px 0 6px; }
-    .module-body p { margin-bottom: 10px; color: #374151; }
-    .module-body ul { padding-left: 20px; margin: 8px 0 14px; }
-    .module-body li { margin-bottom: 6px; color: #374151; }
+    /* ── Body content — matches RichTextEditor.tsx styles exactly ── */
+    .module-body { font-size: 13px; line-height: 1.75; color: #374151; }
+    .module-body h1 { font-size: 22px; font-weight: 800; color: #111827; margin: 28px 0 12px; line-height: 1.25; }
+    .module-body h2 { font-size: 17px; font-weight: 800; color: #111827; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #e5e7eb; }
+    .module-body h3 { font-size: 14px; font-weight: 700; color: #92400e; margin: 20px 0 8px; padding: 8px 14px; border-left: 4px solid #b8922a; background: #fffbeb; border-radius: 0 8px 8px 0; page-break-after: avoid; break-after: avoid; }
+    .module-body h4 { font-size: 12px; font-weight: 700; color: #374151; margin: 14px 0 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .module-body p { margin: 0 0 10px; color: #374151; line-height: 1.75; }
     .module-body strong { color: #111827; font-weight: 700; }
+    .module-body em { color: #4b5563; font-style: italic; }
+    .module-body ul { padding-left: 22px; margin: 8px 0 14px; }
+    .module-body ol { padding-left: 22px; margin: 8px 0 14px; }
+    .module-body li { margin-bottom: 5px; color: #374151; }
+    .module-body ul > li::marker { color: #b8922a; }
+    .module-body ol > li::marker { color: #b8922a; font-weight: 700; }
+    .module-body blockquote { margin: 12px 0; padding: 10px 16px; border-left: 4px solid #b8922a; background: #fffbeb; border-radius: 0 6px 6px 0; color: #78350f; font-style: italic; page-break-inside: avoid; break-inside: avoid; }
+    .module-body hr { border: none; border-top: 1px solid #e5e7eb; margin: 20px 0; }
+    .module-body table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 12px; page-break-inside: avoid; break-inside: avoid; }
+    .module-body th { padding: 8px 12px; text-align: left; font-weight: 700; color: #1e293b; background: #f1f5f9; border: 1px solid #e2e8f0; }
+    .module-body td { padding: 7px 12px; color: #374151; border: 1px solid #e2e8f0; }
+    .module-body tr:nth-child(even) td { background: #f8fafc; }
+    .module-body code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 11px; font-family: monospace; }
 
     /* ── M2 components ── */
     .m2-overview { background: #f9f7f0; border: 1px solid #d4af37; border-radius: 10px; padding: 14px 18px; margin-bottom: 28px; }
