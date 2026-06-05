@@ -226,12 +226,14 @@ function SingleBiomarkerChart({
   compareMode,
   isSelected,
   onToggle,
+  onClick,
 }: {
   series: BiomarkerTimeSeries;
   isGlowing?: boolean;
   compareMode?: boolean;
   isSelected?: boolean;
   onToggle?: () => void;
+  onClick?: () => void;
 }) {
   const W = 280, H = 80;
   const PAD = { top: 10, right: 16, bottom: 24, left: 16 };
@@ -314,6 +316,17 @@ function SingleBiomarkerChart({
           background: isSelected ? 'var(--gold-primary)' : 'transparent',
           display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, transition: 'all 0.2s',
         }} />
+      )}
+
+      {/* Expand button (non-compare mode) */}
+      {!compareMode && hovered && (
+        <button
+          onClick={onClick}
+          style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '6px', padding: '4px', cursor: 'pointer', color: 'var(--gold-primary)', display: 'flex', zIndex: 2 }}
+          title="Ver y editar valor"
+        >
+          <ZoomIn size={13} />
+        </button>
       )}
 
       {/* Header */}
@@ -679,6 +692,7 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
                           compareMode={compareMode}
                           isSelected={isSelected}
                           onToggle={() => onToggleCompare?.(series.name)}
+                          onClick={() => setExpandedSeries({ name: series.name, unit: series.unit, referenceRange: series.referenceRange, points: series.points })}
                         />
                       </div>
                     );
