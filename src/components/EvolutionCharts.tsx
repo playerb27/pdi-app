@@ -216,6 +216,209 @@ function BiomarkerSparkline({
   );
 }
 
+// ── SINGLE-POINT MINI CHART ─────────────────────────────────────────────────
+// Shows a horizontal gauge with the reference band and the value plotted as a
+// dot. Works even with only one data point so patients can see at a glance
+// whether their value is inside or outside the normal range.
+function SingleBiomarkerChart({
+  series,
+  isGlowing,
+  compareMode,
+  isSelected,
+  onToggle,
+}: {
+  series: BiomarkerTimeSeries;
+  isGlowing?: boolean;
+  compareMode?: boolean;
+  isSelected?: boolean;
+  onToggle?: () => void;
+}) {
+  const W = 280, H = 80;
+  const PAD = { top: 10, right: 16, bottom: 24, left: 16 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  const pt = series.points[0];
+  const fc = flagColor(pt.flag, pt.isEdited);
+
+  // Parse catalog-derived ref range from the stored string (e.g. "4.0 - 5.7")
+  // and also try the catalog directly for refMin/refMax.
+  const catalog = getCatalogEntry(series.name);
+  let refMin: number | null = catalog?.refMin ?? null;
+  let refMax: number | null = catalog?.refMax ?? null;
+
+  // Fallback: parse from referenceRange string
+  if ((refMin === null || refMax === null) && series.referenceRange) {
+    const parts = series.referenceRange.split(/[-–]/).map(s => parseFloat(s.trim()));
+    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      if (refMin === null) refMin = parts[0];
+      if (refMax === null) refMax = parts[1];
+    }
+  }
+
+  // Build axis: expand range so value + ref limits all fit with 15% padding
+  const candidates = [pt.value];
+  if (refMin !== null) candidates.push(refMin);
+  if (refMax !== null) candidates.push(refMax);
+  const rawMin = Math.min(...candidates);
+  const rawMax = Math.max(...candidates);
+  const pad15 = (rawMax - rawMin) * 0.18 || rawMax * 0.15 || 1;
+  const axisMin = rawMin - pad15;
+  const axisMax = rawMax + pad15;
+  const axisRange = axisMax - axisMin;
+
+  const toX = (v: number) => PAD.left + ((v - axisMin) / axisRange) * innerW;
+  const midY = PAD.top + innerH / 2;
+  const bandH = innerH * 0.38; // height of the reference band
+
+  const valX = toX(pt.value);
+  const refMinX = refMin !== null ? toX(refMin) : null;
+  const refMaxX = refMax !== null ? toX(refMax) : null;
+
+  const hasRefBand = refMinX !== null || refMaxX !== null;
+  const bandLeft  = refMinX  ?? PAD.left;
+  const bandRight = refMaxX  ?? PAD.left + innerW;
+  const bandWidth = Math.max(bandRight - bandLeft, 0);
+
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        background: isSelected ? 'rgba(212,175,55,0.07)' : 'var(--bg-main)',
+        borderRadius: '10px',
+        border: `${isGlowing ? '2px' : '1px'} solid ${
+          isSelected ? 'rgba(212,175,55,0.6)'
+          : isGlowing ? 'rgba(212,175,55,0.95)'
+          : pt.flag !== 'Normal' ? `${fc}40`
+          : 'var(--border-subtle)'
+        }`,
+        padding: '14px 16px',
+        minWidth: '280px',
+        transition: 'border 0.3s, background 0.3s',
+        cursor: compareMode ? 'pointer' : 'default',
+        zIndex: isGlowing ? 2 : 'auto' as any,
+        transform: hovered && !compareMode ? 'translateY(-1px)' : 'none',
+        boxShadow: hovered && !compareMode ? '0 8px 24px rgba(0,0,0,0.3)' : 'none',
+      }}
+      className={isGlowing ? 'pdi-glow-active' : ''}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={compareMode ? onToggle : undefined}
+    >
+      {compareMode && (
+        <div style={{
+          position: 'absolute', top: '10px', right: '10px', width: '22px', height: '22px',
+          borderRadius: '50%', border: `2px solid ${isSelected ? 'var(--gold-primary)' : 'rgba(255,255,255,0.2)'}`,
+          background: isSelected ? 'var(--gold-primary)' : 'transparent',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, transition: 'all 0.2s',
+        }} />
+      )}
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+        <div>
+          <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: pt.flag !== 'Normal' ? fc : 'var(--text-primary)' }}>{series.name}</p>
+          {series.referenceRange && <p style={{ margin: '2px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>Ref: {series.referenceRange} {series.unit}</p>}
+        </div>
+        <div style={{ textAlign: 'right', paddingRight: compareMode ? '28px' : '0' }}>
+          <span style={{ fontSize: '17px', fontWeight: 800, color: fc, fontFamily: 'monospace' }}>{pt.value}</span>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '3px' }}>{series.unit}</span>
+          {pt.flag !== 'Normal' && (
+            <div style={{ marginTop: '2px' }}>
+              <span style={{ fontSize: '9px', background: `${fc}20`, color: fc, padding: '1px 5px', borderRadius: '4px' }}>{pt.flag}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* SVG gauge chart */}
+      <svg width={W} height={H} style={{ overflow: 'visible', display: 'block' }}>
+        <defs>
+          <linearGradient id={`band-grad-${series.name.replace(/[^a-zA-Z0-9]/g, '')}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
+            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.08" />
+          </linearGradient>
+          <filter id={`dot-glow-${series.name.replace(/[^a-zA-Z0-9]/g, '')}`}>
+            <feGaussianBlur stdDeviation="2.5" result="coloredBlur" />
+            <feMerge><feMergeNode in="coloredBlur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+
+        {/* Baseline axis track */}
+        <line
+          x1={PAD.left} y1={midY} x2={PAD.left + innerW} y2={midY}
+          stroke="var(--border-subtle)" strokeWidth="1.5"
+        />
+
+        {/* Normal-range band (green fill) */}
+        {hasRefBand && (
+          <rect
+            x={bandLeft} y={midY - bandH / 2}
+            width={bandWidth} height={bandH}
+            fill={`url(#band-grad-${series.name.replace(/[^a-zA-Z0-9]/g, '')})`}
+            rx={3}
+          />
+        )}
+        {hasRefBand && (
+          <rect
+            x={bandLeft} y={midY - bandH / 2}
+            width={bandWidth} height={bandH}
+            fill="none" stroke="#22c55e" strokeWidth="0.8" strokeOpacity="0.4"
+            rx={3}
+          />
+        )}
+
+        {/* refMin line */}
+        {refMinX !== null && (
+          <>
+            <line
+              x1={refMinX} y1={PAD.top} x2={refMinX} y2={PAD.top + innerH}
+              stroke="#3b82f6" strokeWidth="1" strokeDasharray="3,2" strokeOpacity="0.8"
+            />
+            <text x={refMinX} y={PAD.top - 2} textAnchor="middle" fontSize="7.5" fill="#3b82f6" fillOpacity="0.9">
+              {refMin}
+            </text>
+          </>
+        )}
+
+        {/* refMax line */}
+        {refMaxX !== null && (
+          <>
+            <line
+              x1={refMaxX} y1={PAD.top} x2={refMaxX} y2={PAD.top + innerH}
+              stroke="#ef4444" strokeWidth="1" strokeDasharray="3,2" strokeOpacity="0.8"
+            />
+            <text x={refMaxX} y={PAD.top - 2} textAnchor="middle" fontSize="7.5" fill="#ef4444" fillOpacity="0.9">
+              {refMax}
+            </text>
+          </>
+        )}
+
+        {/* Value dot with glow */}
+        <circle
+          cx={valX} cy={midY} r={6}
+          fill={fc}
+          filter={`url(#dot-glow-${series.name.replace(/[^a-zA-Z0-9]/g, '')})`}
+          stroke="var(--bg-surface)" strokeWidth="2"
+        />
+
+        {/* Value label below dot */}
+        <text x={valX} y={PAD.top + innerH + 14} textAnchor="middle" fontSize="8" fill={fc} fontWeight="700">
+          {pt.value}
+        </text>
+
+        {/* Date label (right side) */}
+        <text x={PAD.left + innerW} y={PAD.top + innerH + 14} textAnchor="end" fontSize="7.5" fill="var(--text-muted)">
+          {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date)
+            .toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, showOnlyOutOfRange, onSeriesReady, documents }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
@@ -464,31 +667,19 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
                 <p style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '10px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '6px' }}>
                   {MASTER_INDEX[sys] ?? '🔬'} {sys}
                 </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                   {list.map(series => {
-                    const pt = series.points[0];
-                    const fc = flagColor(pt.flag, pt.isEdited);
+                    const elemId = chartBiomarkerElementId(series.name);
                     const isSelected = selectedForCompare?.has(series.name) ?? false;
                     return (
-                      <div
-                        key={series.name}
-                        onClick={compareMode ? () => onToggleCompare?.(series.name) : undefined}
-                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderRadius: '8px', background: isSelected ? 'rgba(212,175,55,0.07)' : 'var(--bg-main)', border: `1px solid ${isSelected ? 'rgba(212,175,55,0.5)' : pt.flag !== 'Normal' ? `${fc}30` : 'var(--border-subtle)'}`, cursor: compareMode ? 'pointer' : 'default', position: 'relative', transition: 'all 0.2s' }}
-                      >
-                        {compareMode && (
-                          <div style={{ position: 'absolute', top: '6px', right: '6px', width: '16px', height: '16px', borderRadius: '50%', border: `2px solid ${isSelected ? 'var(--gold-primary)' : 'rgba(255,255,255,0.2)'}`, background: isSelected ? 'var(--gold-primary)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {isSelected && <Check size={9} color="#000" />}
-                          </div>
-                        )}
-                        <div>
-                          <p style={{ margin: 0, fontSize: '12px', color: fc, fontWeight: 500 }}>{series.name}</p>
-                          {series.referenceRange && <p style={{ margin: '1px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>Ref: {series.referenceRange} {series.unit}</p>}
-                        </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <span style={{ fontSize: '15px', fontWeight: 700, fontFamily: 'monospace', color: fc }}>{pt.value}</span>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '3px' }}>{series.unit}</span>
-                          {pt.flag !== 'Normal' && <div><span style={{ fontSize: '9px', background: `${fc}20`, color: fc, padding: '1px 5px', borderRadius: '4px' }}>{pt.flag}</span></div>}
-                        </div>
+                      <div key={series.name} id={elemId}>
+                        <SingleBiomarkerChart
+                          series={series}
+                          isGlowing={glowId === elemId}
+                          compareMode={compareMode}
+                          isSelected={isSelected}
+                          onToggle={() => onToggleCompare?.(series.name)}
+                        />
                       </div>
                     );
                   })}
