@@ -91,7 +91,50 @@ export function svgForSeries(
   </svg>`;
 }
 
-// Build a series from allStudies for a given marker name
+// ─── Inline SVG zone-bar for single-point series (print version) ─────────────
+// Mirrors FullWidthZoneChart but produces a static SVG string (no React).
+function svgForZoneBar(
+  s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] },
+): string {
+  const W = 700, H = 80;
+  const ref = parseRef(s.referenceRange);
+  const lastPt = s.points[s.points.length - 1];
+  const value = lastPt?.value ?? 0;
+  const flag = lastPt?.flag ?? 'Normal';
+  const lc = flag === 'Alto' ? '#ef4444' : flag === 'Bajo' ? '#3b82f6' : '#22c55e';
+
+  const hasMin = ref.min !== null;
+  const hasMax = ref.max !== null;
+  const pad = 0.35;
+  const visualMin = hasMin ? ref.min! * (1 - pad) : (value * (1 - pad * 2)) || (value - 1);
+  const visualMax = hasMax ? ref.max! * (1 + pad) : (value * (1 + pad * 2)) || (value + 1);
+  const total = visualMax - visualMin || 1;
+
+  const barX = 40, barW = W - 80, barY = 18, barH = 22, barR = barH / 2;
+  const normalLeft = hasMin  ? barX + ((ref.min! - visualMin) / total) * barW : barX;
+  const normalRight = hasMax ? barX + ((ref.max! - visualMin) / total) * barW : barX + barW;
+  const normalWidth = normalRight - normalLeft;
+  const dotX = Math.min(Math.max(barX + ((value - visualMin) / total) * barW, barX + barR), barX + barW - barR);
+  const dotY = barY + barH / 2;
+  const labelY = barY + barH + 14;
+
+  return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;background:#0f0f1a;border-radius:6px">
+    <rect x="${barX}" y="${barY}" width="${(normalLeft - barX).toFixed(1)}" height="${barH}" fill="#3b82f688"/>
+    <rect x="${normalLeft.toFixed(1)}" y="${barY}" width="${Math.max(normalWidth, 0).toFixed(1)}" height="${barH}" fill="#22c55e99"/>
+    <rect x="${normalRight.toFixed(1)}" y="${barY}" width="${(barX + barW - normalRight).toFixed(1)}" height="${barH}" fill="#ef444488"/>
+    <circle cx="${barX}" cy="${dotY}" r="${barR}" fill="#3b82f688"/>
+    <circle cx="${(barX + barW)}" cy="${dotY}" r="${barR}" fill="#ef444488"/>
+    <circle cx="${dotX.toFixed(1)}" cy="${dotY}" r="11" fill="${lc}" stroke="#0a0a15" stroke-width="2.5"/>
+    <circle cx="${dotX.toFixed(1)}" cy="${dotY}" r="4" fill="#0a0a15" opacity="0.7"/>
+    <text x="${dotX.toFixed(1)}" y="${barY - 4}" text-anchor="middle" font-size="11" font-weight="800" fill="${lc}" font-family="monospace">${value}</text>
+    <text x="${barX + 4}" y="${labelY}" font-size="9" font-weight="700" fill="#60a5fa">Bajo</text>
+    ${hasMin ? `<text x="${normalLeft.toFixed(1)}" y="${labelY}" text-anchor="middle" font-size="9" fill="#60a5fa">${ref.min}</text>` : ''}
+    <text x="${((normalLeft + normalRight) / 2).toFixed(1)}" y="${labelY}" text-anchor="middle" font-size="9" font-weight="700" fill="#22c55e">Normal</text>
+    ${hasMax ? `<text x="${normalRight.toFixed(1)}" y="${labelY}" text-anchor="middle" font-size="9" fill="#f87171">${ref.max}</text>` : ''}
+    <text x="${barX + barW - 4}" y="${labelY}" text-anchor="end" font-size="9" font-weight="700" fill="#f87171">Alto</text>
+  </svg>`;
+}
+
 export function buildSeriesForPrint(
   markerName: string,
   allStudies: any[],
@@ -501,7 +544,7 @@ export function generatePrintHTML(
             <span style="color:${lc};font-size:20px;font-weight:900;font-family:monospace;white-space:nowrap">${lastVal?.value ?? '—'} <span style="font-size:10px;font-weight:400;color:#9ca3af">${s.unit}</span></span>
           </div>
           ${s.referenceRange ? `<div style="padding:0 14px 6px;font-size:9.5px;color:#9ca3af;background:#fff">Referencia: ${s.referenceRange} ${s.unit}</div>` : ''}
-          ${svgForSeries(s)}
+          ${s.points.length === 1 ? svgForZoneBar(s) : svgForSeries(s)}
         </div>`;
       }).join('');
 
