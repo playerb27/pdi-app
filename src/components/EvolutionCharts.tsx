@@ -611,11 +611,6 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
     return map;
   }, [studies]);
 
-  // Notify parent whenever the processed series map changes
-  // so ComparativeModal always gets the correctly-deduplicated data
-  // Must be useEffect (not useMemo) — calling parent setState during render is illegal in React 19
-  useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap, onSeriesReady]);
-
   // Apply rangeOverrides on top of timeSeriesMap so mini-cards show updated limits
   // immediately without a page reload.
   const displaySeriesMap = useMemo(() => {
@@ -628,6 +623,12 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
     }
     return patched;
   }, [timeSeriesMap, rangeOverrides]);
+
+  // Notify parent whenever the processed (+ overrides applied) map changes
+  // so ComparativeModal always sees the same data as the mini-cards.
+  // Uses displaySeriesMap (not timeSeriesMap) so range overrides are included.
+  // Must be useEffect (not useMemo) — calling parent setState during render is illegal in React 19
+  useEffect(() => { onSeriesReady?.(displaySeriesMap); }, [displaySeriesMap, onSeriesReady]);
 
   const allSeries = Object.values(displaySeriesMap);
   const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);
