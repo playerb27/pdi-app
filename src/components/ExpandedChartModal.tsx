@@ -191,9 +191,112 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
           </div>
         </div>
 
-        {/* Chart */}
+        {/* Chart — zone bar for single point, line chart for multiple */}
         <div style={{ position: 'relative', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', padding: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+          {points.length === 1 ? (() => {
+            // ── EPIC ZONE BAR for single measurement ──────────────────────────
+            const spt = points[0];
+            const WBAR = 704, HBAR = 200;
+            const BL = 40, BR = 664, bW = BR - BL;
+            const bY = 90, bH = 56, bRad = 28;
+
+            const allV = [spt.value];
+            if (ref.min !== null) allV.push(ref.min);
+            if (ref.max !== null) allV.push(ref.max);
+            const dMin = Math.min(...allV), dMax = Math.max(...allV);
+            const sp = dMax - dMin || Math.abs(dMax) * 0.4 || 1;
+            const aMin = dMin - sp * 0.28, aMax = dMax + sp * 0.28;
+            const aSpan = aMax - aMin;
+            const tX = (v: number) => BL + Math.max(0, Math.min(1, (v - aMin) / aSpan)) * bW;
+
+            const vX = tX(spt.value);
+            const rMinX = ref.min !== null ? tX(ref.min) : BL;
+            const rMaxX = ref.max !== null ? tX(ref.max) : BR;
+            const hLow  = ref.min !== null && (rMinX - BL) > 4;
+            const hHigh = ref.max !== null && (BR - rMaxX) > 4;
+            const nStart = hLow ? rMinX : BL;
+            const nEnd   = hHigh ? rMaxX : BR;
+            const nX = Math.max(BL + 4, Math.min(BR - 4, vX));
+            const sc = flagColor(spt.flag, spt.isEdited);
+            const dateLabel = new Date(/^\d{4}-\d{2}-\d{2}$/.test(spt.date) ? spt.date + 'T12:00:00' : spt.date)
+              .toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+
+            return (
+              <div style={{ padding: '8px 0' }}>
+                {/* Big value display */}
+                <div style={{ textAlign: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '56px', fontWeight: 900, color: sc, fontFamily: 'monospace', lineHeight: 1, filter: `drop-shadow(0 0 24px ${sc}55)` }}>{spt.value}</span>
+                  <span style={{ fontSize: '18px', color: 'rgba(255,255,255,0.35)', marginLeft: '8px' }}>{series.unit}</span>
+                  {spt.flag !== 'Normal' && (
+                    <div style={{ marginTop: '6px' }}>
+                      <span style={{ fontSize: '13px', background: `${sc}22`, color: sc, padding: '4px 16px', borderRadius: '24px', fontWeight: 800, letterSpacing: '0.5px' }}>{spt.flag}</span>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.28)', marginTop: '6px' }}>{dateLabel}</div>
+                </div>
+
+                {/* Zone bar */}
+                <svg width={WBAR} height={HBAR} style={{ overflow: 'visible', maxWidth: '100%', display: 'block', margin: '0 auto' }}>
+                  <defs>
+                    <clipPath id="modal-zb-clip"><rect x={BL} y={bY} width={bW} height={bH} rx={bRad} /></clipPath>
+                    <filter id="modal-zb-glow" x="-60%" y="-60%" width="220%" height="220%">
+                      <feGaussianBlur stdDeviation="7" result="b" />
+                      <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+                    </filter>
+                    <linearGradient id="modal-zb-low" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.15" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.5" />
+                    </linearGradient>
+                    <linearGradient id="modal-zb-norm" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
+                      <stop offset="50%" stopColor="#22c55e" stopOpacity="0.4" />
+                      <stop offset="100%" stopColor="#22c55e" stopOpacity="0.22" />
+                    </linearGradient>
+                    <linearGradient id="modal-zb-high" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#ef4444" stopOpacity="0.5" />
+                      <stop offset="100%" stopColor="#ef4444" stopOpacity="0.15" />
+                    </linearGradient>
+                  </defs>
+
+                  {/* Track */}
+                  <rect x={BL} y={bY} width={bW} height={bH} rx={bRad} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+
+                  {/* Zones */}
+                  {hLow && <rect x={BL} y={bY} width={rMinX - BL} height={bH} fill="url(#modal-zb-low)" clipPath="url(#modal-zb-clip)" />}
+                  <rect x={nStart} y={bY} width={nEnd - nStart} height={bH} fill="url(#modal-zb-norm)" clipPath="url(#modal-zb-clip)" />
+                  {hHigh && <rect x={rMaxX} y={bY} width={BR - rMaxX} height={bH} fill="url(#modal-zb-high)" clipPath="url(#modal-zb-clip)" />}
+
+                  {/* Dividers */}
+                  {hLow  && <line x1={rMinX} y1={bY} x2={rMinX} y2={bY + bH} stroke="rgba(255,255,255,0.15)" strokeWidth="2" />}
+                  {hHigh && <line x1={rMaxX} y1={bY} x2={rMaxX} y2={bY + bH} stroke="rgba(255,255,255,0.15)" strokeWidth="2" />}
+
+                  {/* Zone labels inside bar */}
+                  {hLow && (rMinX - BL) > 80 && (
+                    <text x={(BL + rMinX) / 2} y={bY + bH / 2 + 1} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="800" fill="rgba(59,130,246,0.85)" letterSpacing="1.5">BAJO</text>
+                  )}
+                  {(nEnd - nStart) > 80 && (
+                    <text x={(nStart + nEnd) / 2} y={bY + bH / 2 + 1} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="800" fill="rgba(34,197,94,0.85)" letterSpacing="1.5">NORMAL</text>
+                  )}
+                  {hHigh && (BR - rMaxX) > 80 && (
+                    <text x={(rMaxX + BR) / 2} y={bY + bH / 2 + 1} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="800" fill="rgba(239,68,68,0.85)" letterSpacing="1.5">ALTO</text>
+                  )}
+
+                  {/* Ref labels above */}
+                  {hLow && <text x={rMinX} y={bY - 10} textAnchor="middle" fontSize="12" fill="rgba(59,130,246,0.6)" fontWeight="700">{ref.min}</text>}
+                  {hHigh && <text x={rMaxX} y={bY - 10} textAnchor="middle" fontSize="12" fill="rgba(239,68,68,0.6)" fontWeight="700">{ref.max}</text>}
+
+                  {/* Needle line */}
+                  <line x1={nX} y1={bY - 38} x2={nX} y2={bY + bH + 12} stroke={sc} strokeWidth="2.5" strokeOpacity="0.45" />
+
+                  {/* Glowing needle circle */}
+                  <circle cx={nX} cy={bY + bH / 2} r={20} fill={sc} filter="url(#modal-zb-glow)" stroke="#0f0f1a" strokeWidth="3.5" />
+                  <text x={nX} y={bY + bH / 2} textAnchor="middle" dominantBaseline="middle" fontSize="11" fontWeight="900" fill="#fff" fontFamily="monospace">{spt.value}</text>
+                </svg>
+              </div>
+            );
+          })() : (
           <svg width={W} height={H} style={{ overflow: 'visible', maxWidth: '100%' }}>
+
             <defs>
               <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={lc} stopOpacity="0.3" />
@@ -277,6 +380,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               );
             })()}
           </svg>
+          )}
         </div>
 
         {/* Legend */}

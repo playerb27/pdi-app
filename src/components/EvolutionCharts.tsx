@@ -216,11 +216,10 @@ function BiomarkerSparkline({
   );
 }
 
-// ── SINGLE-POINT MINI CHART ─────────────────────────────────────────────────
-// Shows a horizontal gauge with the reference band and the value plotted as a
-// dot. Works even with only one data point so patients can see at a glance
-// whether their value is inside or outside the normal range.
-function SingleBiomarkerChart({
+// ── ZONE BAR CHART (single-point, Ultrahuman/Apple Health style) ─────────────
+// Colored zone bar (Bajo/Normal/Alto) with a large glowing marker showing
+// exactly where the value lands. Dramatically more visual than a dot on a line.
+function ZoneBarChart({
   series,
   isGlowing,
   compareMode,
@@ -235,21 +234,19 @@ function SingleBiomarkerChart({
   onToggle?: () => void;
   onClick?: () => void;
 }) {
-  const W = 280, H = 80;
-  const PAD = { top: 10, right: 16, bottom: 24, left: 16 };
-  const innerW = W - PAD.left - PAD.right;
-  const innerH = H - PAD.top - PAD.bottom;
+  const W = 280;
+  const BAR_L = 16, BAR_R = 264;
+  const barW = BAR_R - BAR_L;
+  const barY = 54, barH = 22, barR = 11;
+  const SVG_H = barY + barH + 26;
 
   const pt = series.points[0];
   const fc = flagColor(pt.flag, pt.isEdited);
+  const [hovered, setHovered] = useState(false);
 
-  // Parse catalog-derived ref range from the stored string (e.g. "4.0 - 5.7")
-  // and also try the catalog directly for refMin/refMax.
   const catalog = getCatalogEntry(series.name);
   let refMin: number | null = catalog?.refMin ?? null;
   let refMax: number | null = catalog?.refMax ?? null;
-
-  // Fallback: parse from referenceRange string
   if ((refMin === null || refMax === null) && series.referenceRange) {
     const parts = series.referenceRange.split(/[-–]/).map(s => parseFloat(s.trim()));
     if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
@@ -258,174 +255,193 @@ function SingleBiomarkerChart({
     }
   }
 
-  // Build axis: expand range so value + ref limits all fit with 15% padding
-  const candidates = [pt.value];
-  if (refMin !== null) candidates.push(refMin);
-  if (refMax !== null) candidates.push(refMax);
-  const rawMin = Math.min(...candidates);
-  const rawMax = Math.max(...candidates);
-  const pad15 = (rawMax - rawMin) * 0.18 || rawMax * 0.15 || 1;
-  const axisMin = rawMin - pad15;
-  const axisMax = rawMax + pad15;
-  const axisRange = axisMax - axisMin;
+  // Axis: value + refs with 25% breathing room on each side
+  const allVals = [pt.value];
+  if (refMin !== null) allVals.push(refMin);
+  if (refMax !== null) allVals.push(refMax);
+  const dataMin = Math.min(...allVals);
+  const dataMax = Math.max(...allVals);
+  const spread = dataMax - dataMin || Math.abs(dataMax) * 0.4 || 1;
+  const axisMin = dataMin - spread * 0.28;
+  const axisMax = dataMax + spread * 0.28;
+  const axisSpan = axisMax - axisMin;
 
-  const toX = (v: number) => PAD.left + ((v - axisMin) / axisRange) * innerW;
-  const midY = PAD.top + innerH / 2;
-  const bandH = innerH * 0.38; // height of the reference band
+  const toX = (v: number) => BAR_L + Math.max(0, Math.min(1, (v - axisMin) / axisSpan)) * barW;
 
   const valX = toX(pt.value);
-  const refMinX = refMin !== null ? toX(refMin) : null;
-  const refMaxX = refMax !== null ? toX(refMax) : null;
+  const refMinX = refMin !== null ? toX(refMin) : BAR_L;
+  const refMaxX = refMax !== null ? toX(refMax) : BAR_R;
 
-  const hasRefBand = refMinX !== null || refMaxX !== null;
-  const bandLeft  = refMinX  ?? PAD.left;
-  const bandRight = refMaxX  ?? PAD.left + innerW;
-  const bandWidth = Math.max(bandRight - bandLeft, 0);
+  const hasLow  = refMin !== null && (refMinX - BAR_L) > 3;
+  const hasHigh = refMax !== null && (BAR_R - refMaxX) > 3;
 
-  const [hovered, setHovered] = useState(false);
+  const normalStart = hasLow  ? refMinX : BAR_L;
+  const normalEnd   = hasHigh ? refMaxX : BAR_R;
+
+  const needleX = Math.max(BAR_L + 2, Math.min(BAR_R - 2, valX));
+  const uid = `zb-${series.name.replace(/[^a-zA-Z0-9]/g, '')}`;
+
+  const dateStr = new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date)
+    .toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
 
   return (
     <div
       style={{
         position: 'relative',
         background: isSelected ? 'rgba(212,175,55,0.07)' : 'var(--bg-main)',
-        borderRadius: '10px',
+        borderRadius: '12px',
         border: `${isGlowing ? '2px' : '1px'} solid ${
           isSelected ? 'rgba(212,175,55,0.6)'
           : isGlowing ? 'rgba(212,175,55,0.95)'
-          : pt.flag !== 'Normal' ? `${fc}40`
+          : pt.flag !== 'Normal' ? `${fc}35`
           : 'var(--border-subtle)'
         }`,
-        padding: '14px 16px',
+        padding: '14px 0 0',
         minWidth: '280px',
-        transition: 'border 0.3s, background 0.3s',
+        overflow: 'hidden',
+        transition: 'border 0.25s, box-shadow 0.25s, transform 0.15s',
         cursor: compareMode ? 'pointer' : 'default',
         zIndex: isGlowing ? 2 : 'auto' as any,
-        transform: hovered && !compareMode ? 'translateY(-1px)' : 'none',
-        boxShadow: hovered && !compareMode ? '0 8px 24px rgba(0,0,0,0.3)' : 'none',
+        transform: hovered && !compareMode ? 'translateY(-2px)' : 'none',
+        boxShadow: hovered && !compareMode
+          ? `0 10px 30px rgba(0,0,0,0.35), 0 0 0 1px ${fc}18`
+          : isGlowing ? `0 0 24px ${fc}28` : 'none',
       }}
       className={isGlowing ? 'pdi-glow-active' : ''}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={compareMode ? onToggle : undefined}
     >
+      {/* Compare circle */}
       {compareMode && (
-        <div style={{
-          position: 'absolute', top: '10px', right: '10px', width: '22px', height: '22px',
-          borderRadius: '50%', border: `2px solid ${isSelected ? 'var(--gold-primary)' : 'rgba(255,255,255,0.2)'}`,
-          background: isSelected ? 'var(--gold-primary)' : 'transparent',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2, transition: 'all 0.2s',
-        }} />
+        <div style={{ position: 'absolute', top: '10px', right: '10px', width: '22px', height: '22px', borderRadius: '50%', border: `2px solid ${isSelected ? 'var(--gold-primary)' : 'rgba(255,255,255,0.2)'}`, background: isSelected ? 'var(--gold-primary)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2 }}>
+          {isSelected && <Check size={9} color="#000" />}
+        </div>
       )}
 
-      {/* Expand button (non-compare mode) */}
+      {/* Expand button */}
       {!compareMode && hovered && (
-        <button
-          onClick={onClick}
-          style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '6px', padding: '4px', cursor: 'pointer', color: 'var(--gold-primary)', display: 'flex', zIndex: 2 }}
-          title="Ver y editar valor"
-        >
+        <button onClick={onClick} style={{ position: 'absolute', top: '10px', right: '10px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', borderRadius: '6px', padding: '4px', cursor: 'pointer', color: 'var(--gold-primary)', display: 'flex', zIndex: 2 }} title="Ver y editar valor">
           <ZoomIn size={13} />
         </button>
       )}
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingLeft: '16px', paddingRight: hovered || compareMode ? '40px' : '16px', marginBottom: '0px' }}>
         <div>
-          <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: pt.flag !== 'Normal' ? fc : 'var(--text-primary)' }}>{series.name}</p>
-          {series.referenceRange && <p style={{ margin: '2px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>Ref: {series.referenceRange} {series.unit}</p>}
+          <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: pt.flag !== 'Normal' ? fc : 'var(--text-primary)', lineHeight: 1.3 }}>{series.name}</p>
+          {series.referenceRange && (
+            <p style={{ margin: '1px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}>
+              Ref: {series.referenceRange} {series.unit}
+            </p>
+          )}
         </div>
-        <div style={{ textAlign: 'right', paddingRight: compareMode ? '28px' : '0' }}>
-          <span style={{ fontSize: '17px', fontWeight: 800, color: fc, fontFamily: 'monospace' }}>{pt.value}</span>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '3px' }}>{series.unit}</span>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ lineHeight: 1 }}>
+            <span style={{ fontSize: '20px', fontWeight: 800, color: fc, fontFamily: 'monospace' }}>{pt.value}</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginLeft: '3px' }}>{series.unit}</span>
+          </div>
           {pt.flag !== 'Normal' && (
-            <div style={{ marginTop: '2px' }}>
-              <span style={{ fontSize: '9px', background: `${fc}20`, color: fc, padding: '1px 5px', borderRadius: '4px' }}>{pt.flag}</span>
+            <div style={{ marginTop: '3px' }}>
+              <span style={{ fontSize: '9px', background: `${fc}22`, color: fc, padding: '1px 7px', borderRadius: '20px', fontWeight: 700, letterSpacing: '0.3px' }}>{pt.flag}</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* SVG gauge chart */}
-      <svg width={W} height={H} style={{ overflow: 'visible', display: 'block' }}>
+      {/* Zone bar SVG */}
+      <svg width={W} height={SVG_H} style={{ display: 'block', overflow: 'visible' }}>
         <defs>
-          <linearGradient id={`band-grad-${series.name.replace(/[^a-zA-Z0-9]/g, '')}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
-            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.08" />
-          </linearGradient>
-          <filter id={`dot-glow-${series.name.replace(/[^a-zA-Z0-9]/g, '')}`}>
-            <feGaussianBlur stdDeviation="2.5" result="coloredBlur" />
-            <feMerge><feMergeNode in="coloredBlur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          <clipPath id={`${uid}-clip`}>
+            <rect x={BAR_L} y={barY} width={barW} height={barH} rx={barR} />
+          </clipPath>
+          <filter id={`${uid}-glow`} x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
           </filter>
+          <linearGradient id={`${uid}-low`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.48" />
+          </linearGradient>
+          <linearGradient id={`${uid}-norm`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#22c55e" stopOpacity="0.28" />
+            <stop offset="50%" stopColor="#22c55e" stopOpacity="0.42" />
+            <stop offset="100%" stopColor="#22c55e" stopOpacity="0.28" />
+          </linearGradient>
+          <linearGradient id={`${uid}-high`} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#ef4444" stopOpacity="0.48" />
+            <stop offset="100%" stopColor="#ef4444" stopOpacity="0.18" />
+          </linearGradient>
         </defs>
 
-        {/* Baseline axis track */}
-        <line
-          x1={PAD.left} y1={midY} x2={PAD.left + innerW} y2={midY}
-          stroke="var(--border-subtle)" strokeWidth="1.5"
-        />
+        {/* Track background */}
+        <rect x={BAR_L} y={barY} width={barW} height={barH} rx={barR} fill="rgba(255,255,255,0.04)" />
 
-        {/* Normal-range band (green fill) */}
-        {hasRefBand && (
-          <rect
-            x={bandLeft} y={midY - bandH / 2}
-            width={bandWidth} height={bandH}
-            fill={`url(#band-grad-${series.name.replace(/[^a-zA-Z0-9]/g, '')})`}
-            rx={3}
-          />
+        {/* ── Color zones ── */}
+        {hasLow && (
+          <rect x={BAR_L} y={barY} width={refMinX - BAR_L} height={barH}
+            fill={`url(#${uid}-low)`} clipPath={`url(#${uid}-clip)`} />
         )}
-        {hasRefBand && (
-          <rect
-            x={bandLeft} y={midY - bandH / 2}
-            width={bandWidth} height={bandH}
-            fill="none" stroke="#22c55e" strokeWidth="0.8" strokeOpacity="0.4"
-            rx={3}
-          />
+        <rect x={normalStart} y={barY} width={normalEnd - normalStart} height={barH}
+          fill={`url(#${uid}-norm)`} clipPath={`url(#${uid}-clip)`} />
+        {hasHigh && (
+          <rect x={refMaxX} y={barY} width={BAR_R - refMaxX} height={barH}
+            fill={`url(#${uid}-high)`} clipPath={`url(#${uid}-clip)`} />
         )}
 
-        {/* refMin line */}
-        {refMinX !== null && (
-          <>
-            <line
-              x1={refMinX} y1={PAD.top} x2={refMinX} y2={PAD.top + innerH}
-              stroke="#3b82f6" strokeWidth="1" strokeDasharray="3,2" strokeOpacity="0.8"
-            />
-            <text x={refMinX} y={PAD.top - 2} textAnchor="middle" fontSize="7.5" fill="#3b82f6" fillOpacity="0.9">
-              {refMin}
-            </text>
-          </>
+        {/* Zone dividers */}
+        {hasLow && (
+          <line x1={refMinX} y1={barY} x2={refMinX} y2={barY + barH}
+            stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
+        )}
+        {hasHigh && (
+          <line x1={refMaxX} y1={barY} x2={refMaxX} y2={barY + barH}
+            stroke="rgba(255,255,255,0.18)" strokeWidth="1.5" />
         )}
 
-        {/* refMax line */}
-        {refMaxX !== null && (
-          <>
-            <line
-              x1={refMaxX} y1={PAD.top} x2={refMaxX} y2={PAD.top + innerH}
-              stroke="#ef4444" strokeWidth="1" strokeDasharray="3,2" strokeOpacity="0.8"
-            />
-            <text x={refMaxX} y={PAD.top - 2} textAnchor="middle" fontSize="7.5" fill="#ef4444" fillOpacity="0.9">
-              {refMax}
-            </text>
-          </>
+        {/* Bar border */}
+        <rect x={BAR_L} y={barY} width={barW} height={barH} rx={barR}
+          fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="1" />
+
+        {/* Ref value labels above bar */}
+        {hasLow && (
+          <text x={refMinX} y={barY - 5} textAnchor="middle" fontSize="7.5" fill="rgba(59,130,246,0.65)" fontWeight="600">{refMin}</text>
+        )}
+        {hasHigh && (
+          <text x={refMaxX} y={barY - 5} textAnchor="middle" fontSize="7.5" fill="rgba(239,68,68,0.65)" fontWeight="600">{refMax}</text>
         )}
 
-        {/* Value dot with glow */}
-        <circle
-          cx={valX} cy={midY} r={6}
-          fill={fc}
-          filter={`url(#dot-glow-${series.name.replace(/[^a-zA-Z0-9]/g, '')})`}
-          stroke="var(--bg-surface)" strokeWidth="2"
-        />
+        {/* Needle line */}
+        <line x1={needleX} y1={barY - 16} x2={needleX} y2={barY + barH + 2}
+          stroke={fc} strokeWidth="1.5" strokeOpacity="0.55" />
 
-        {/* Value label below dot */}
-        <text x={valX} y={PAD.top + innerH + 14} textAnchor="middle" fontSize="8" fill={fc} fontWeight="700">
+        {/* Value label above needle */}
+        <text x={needleX} y={barY - 20} textAnchor="middle" fontSize="9.5" fontWeight="800" fill={fc}
+          style={{ filter: `drop-shadow(0 0 4px ${fc}88)` }}>
           {pt.value}
         </text>
 
-        {/* Date label (right side) */}
-        <text x={PAD.left + innerW} y={PAD.top + innerH + 14} textAnchor="end" fontSize="7.5" fill="var(--text-muted)">
-          {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date)
-            .toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+        {/* Glowing needle circle */}
+        <circle cx={needleX} cy={barY + barH / 2} r={10}
+          fill={fc} filter={`url(#${uid}-glow)`} stroke="var(--bg-main)" strokeWidth="2.5" />
+
+        {/* Zone labels below bar */}
+        {hasLow && (refMinX - BAR_L) > 28 && (
+          <text x={(BAR_L + refMinX) / 2} y={barY + barH + 14}
+            textAnchor="middle" fontSize="8" fill="rgba(59,130,246,0.75)" fontWeight="600">Bajo</text>
+        )}
+        {(normalEnd - normalStart) > 24 && (
+          <text x={(normalStart + normalEnd) / 2} y={barY + barH + 14}
+            textAnchor="middle" fontSize="8" fill="rgba(34,197,94,0.75)" fontWeight="600">Normal</text>
+        )}
+        {hasHigh && (BAR_R - refMaxX) > 28 && (
+          <text x={(refMaxX + BAR_R) / 2} y={barY + barH + 14}
+            textAnchor="middle" fontSize="8" fill="rgba(239,68,68,0.75)" fontWeight="600">Alto</text>
+        )}
+
+        {/* Date bottom right */}
+        <text x={BAR_R} y={barY + barH + 14} textAnchor="end" fontSize="7.5" fill="var(--text-muted)">
+          {dateStr}
         </text>
       </svg>
     </div>
@@ -686,7 +702,7 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
                     const isSelected = selectedForCompare?.has(series.name) ?? false;
                     return (
                       <div key={series.name} id={elemId}>
-                        <SingleBiomarkerChart
+                        <ZoneBarChart
                           series={series}
                           isGlowing={glowId === elemId}
                           compareMode={compareMode}
