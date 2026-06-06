@@ -18,7 +18,7 @@ import dynamic from 'next/dynamic';
 const RichTextEditor = dynamic(() => import('@/components/RichTextEditor'), { ssr: false, loading: () => <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Cargando editor…</div> });
 import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
-import { FullWidthChart } from '@/components/ComparativeModal';
+import { FullWidthChart, FullWidthZoneChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
 
 
@@ -727,9 +727,11 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                   </div>
                                   {/* Stacked charts */}
                                   <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                    {builtSeries.map(s => (
-                                      <FullWidthChart key={s.name} series={s} onClick={() => setExpandedChart6(s)} />
-                                    ))}
+                                    {builtSeries.map(s =>
+                                      s.points.length === 1
+                                        ? <FullWidthZoneChart key={s.name} series={s} onClick={() => setExpandedChart6(s)} />
+                                        : <FullWidthChart     key={s.name} series={s} onClick={() => setExpandedChart6(s)} />
+                                    )}
                                     {builtSeries.length === 0 && (
                                       <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', textAlign: 'center', padding: '12px' }}>
                                         Sin datos para los marcadores seleccionados.

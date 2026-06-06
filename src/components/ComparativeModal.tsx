@@ -22,7 +22,7 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
 
 // ── Full-width ZoneBarChart for single-point series ─────────────────────────
 // Mirrors the mini-card ZoneBarChart but stretched to full width inside the modal.
-function FullWidthZoneChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
+export function FullWidthZoneChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
   const ref = parseRef(series.referenceRange);
   const lastPt = series.points[series.points.length - 1];
   const value = lastPt?.value ?? 0;
