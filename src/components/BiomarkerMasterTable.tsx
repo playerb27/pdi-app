@@ -5,6 +5,7 @@ import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, tablaBiomarkerElementId } from '@/lib/biomarkers';
 import { BIOMARKER_CATALOG, CATALOG_SYSTEMS, getCatalogEntry, computeFlag, type CatalogEntry } from '@/lib/biomarker-catalog';
 import { updateBiomarker } from '@/lib/api';
+import { parseReferenceRange } from '@/lib/parseReferenceRange';
 
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -302,12 +303,9 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         let bmRefMin: number | null = null;
         let bmRefMax: number | null = null;
         if (dbRange) {
-          const rangeMatch = dbRange.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
-          const ltMatch = dbRange.match(/[<≤]\s*(\d+\.?\d*)/);
-          const gtMatch = dbRange.match(/[>≥]\s*(\d+\.?\d*)/);
-          if (rangeMatch) { bmRefMin = parseFloat(rangeMatch[1]); bmRefMax = parseFloat(rangeMatch[2]); }
-          else if (ltMatch) { bmRefMax = parseFloat(ltMatch[1]); }
-          else if (gtMatch) { bmRefMin = parseFloat(gtMatch[1]); }
+          const parsed = parseReferenceRange(dbRange);
+          bmRefMin = parsed.min;
+          bmRefMax = parsed.max;
         }
         // Fall back to catalog only if DB had nothing
         if (bmRefMin === null && bmRefMax === null) {

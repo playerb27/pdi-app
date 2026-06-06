@@ -3,21 +3,11 @@ import { useState } from 'react';
 import { X, BarChart2, FileText, Check, Loader2, MessageSquare, ChevronDown, ChevronUp, Sparkles, RefreshCw } from 'lucide-react';
 import type { ChartSeries } from './ExpandedChartModal';
 import ExpandedChartModal from './ExpandedChartModal';
+import { parseReferenceRange as parseRef } from '@/lib/parseReferenceRange';
 
 function flagColor(flag: string) {
   if (flag === 'Excluido') return 'rgba(255,255,255,0.2)';
   return flag === 'Alto' ? '#ef4444' : flag === 'Bajo' ? '#3b82f6' : '#22c55e';
-}
-
-function parseRef(ref?: string): { min: number | null; max: number | null } {
-  if (!ref) return { min: null, max: null };
-  const m = ref.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
-  if (m) return { min: parseFloat(m[1]), max: parseFloat(m[2]) };
-  const lt = ref.match(/[<≤]\s*(\d+\.?\d*)/);
-  if (lt) return { min: null, max: parseFloat(lt[1]) };
-  const gt = ref.match(/[>≥]\s*(\d+\.?\d*)/);
-  if (gt) return { min: parseFloat(gt[1]), max: null };
-  return { min: null, max: null };
 }
 
 // ── Full-width ZoneBarChart for single-point series ─────────────────────────

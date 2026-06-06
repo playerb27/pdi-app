@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, Minus, ZoomIn, Check } from 'lucide-react';
 import type { Study } from '@/lib/api';
 import { normalizeBiomarkerName, chartBiomarkerElementId } from '@/lib/biomarkers';
 import { getCatalogEntry } from '@/lib/biomarker-catalog';
+import { parseReferenceRange } from '@/lib/parseReferenceRange';
 import ExpandedChartModal, { type ChartSeries } from './ExpandedChartModal';
 
 
@@ -256,13 +257,9 @@ function ZoneBarChart({
 
   if (series.referenceRange) {
     // Parse from DB first — this is always the source of truth
-    const rr = series.referenceRange;
-    const rangeMatch = rr.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
-    const ltMatch = rr.match(/[<≤]\s*(\d+\.?\d*)/);
-    const gtMatch = rr.match(/[>≥]\s*(\d+\.?\d*)/);
-    if (rangeMatch) { refMin = parseFloat(rangeMatch[1]); refMax = parseFloat(rangeMatch[2]); }
-    else if (ltMatch) { refMax = parseFloat(ltMatch[1]); }
-    else if (gtMatch) { refMin = parseFloat(gtMatch[1]); }
+    const parsed = parseReferenceRange(series.referenceRange);
+    refMin = parsed.min;
+    refMax = parsed.max;
   }
 
   // Fall back to catalog only if DB had nothing useful
@@ -784,7 +781,7 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
                       const timestamp = new Date().toISOString();
                       return {
                         ...p,
-                        value: parseFloat(newValue) || p.value,
+                        value: isNaN(parseFloat(newValue)) ? p.value : parseFloat(newValue),
                         flag: newFlag,
                         isEdited: true,
                         originalValue: `${cleanOrig}|${timestamp}`

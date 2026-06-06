@@ -1,4 +1,5 @@
 'use client';
+import { parseReferenceRange as parseRef } from '@/lib/parseReferenceRange';
 import { useState, useEffect } from 'react';
 import { X, Edit2, Check, ChevronLeft, ChevronRight, Eye, Settings2 } from 'lucide-react';
 import { updateBiomarker, updateBiomarkerRange, deleteBiomarker } from '@/lib/api';
@@ -20,16 +21,6 @@ export interface ChartSeries {
   points: ChartPoint[];
 }
 
-function parseRef(ref?: string): { min: number | null; max: number | null } {
-  if (!ref) return { min: null, max: null };
-  const m = ref.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
-  if (m) return { min: parseFloat(m[1]), max: parseFloat(m[2]) };
-  const lt = ref.match(/[<≤]\s*(\d+\.?\d*)/);
-  if (lt) return { min: null, max: parseFloat(lt[1]) };
-  const gt = ref.match(/[>≥]\s*(\d+\.?\d*)/);
-  if (gt) return { min: parseFloat(gt[1]), max: null };
-  return { min: null, max: null };
-}
 
 function flagColor(flag: string, isEdited?: boolean) {
   if (isEdited) return '#d4af37';

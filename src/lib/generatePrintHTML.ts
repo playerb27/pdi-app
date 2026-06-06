@@ -1,6 +1,7 @@
 // ─── PDF/Print HTML Generator ──────────────────────────────────────────────────
 // Generates a clean, white, print-optimized HTML document from report modules.
 import { marked } from 'marked';
+import { parseReferenceRange as parseRef } from './parseReferenceRange';
 
 // Configure marked the same way as the editor for consistent rendering
 marked.setOptions({ gfm: true, breaks: false });
@@ -21,17 +22,7 @@ const MODULE_DEFS: ModuleDef[] = [
   { num: 7, icon: '🤖', title: 'Análisis del Asistente Clínico', color: '#6d28d9' },
 ];
 
-// ─── Inline SVG chart builder (mirrors FullWidthChart logic) ─────────────────
-function parseRef(ref?: string): { min: number | null; max: number | null } {
-  if (!ref) return { min: null, max: null };
-  const m = ref.match(/([\d,.]+)\s*[-–]\s*([\d,.]+)/);
-  if (m) return { min: parseFloat(m[1].replace(',', '.')), max: parseFloat(m[2].replace(',', '.')) };
-  const lt = ref.match(/[<≤]\s*(\d+\.?\d*)/);
-  if (lt) return { min: null, max: parseFloat(lt[1]) };
-  const gt = ref.match(/[>≥]\s*(\d+\.?\d*)/);
-  if (gt) return { min: parseFloat(gt[1]), max: null };
-  return { min: null, max: null };
-}
+
 
 export function svgForSeries(
   s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] },
@@ -153,13 +144,19 @@ export function buildSeriesForPrint(
     if (!bm) continue;
     const v = parseFloat(bm.value);
     if (isNaN(v)) continue;
-    points.push({ date: study.exam_date ?? study.created_at, value: v, flag: bm.flag ?? 'Normal' });
+    // Date priority: exam_date > filename date > created_at (same as live UI)
+    const fileDate = study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
+    const rawDate = (study as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : null) ?? study.created_at;
+    points.push({ date: rawDate, value: v, flag: bm.flag ?? 'Normal' });
     if (!unit) unit = bm.unit ?? '';
     // Always take the most recent range (no guard) so custom DB limits win over older ones
     if (bm.reference_range) refRange = bm.reference_range;
   }
   if (points.length === 0) return null;
-  points.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  points.sort((a, b) => {
+    const fixDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T12:00:00' : d;
+    return new Date(fixDate(a.date)).getTime() - new Date(fixDate(b.date)).getTime();
+  });
   return { name: markerName, unit, referenceRange: refRange, points };
 }
 
@@ -367,7 +364,7 @@ function m2JsonToHtml(content: string): string {
               <div class="m2-hero-name">${bm.name}</div>
               ${isStale && ageMonths > 0 ? `<span style="font-size:8px;color:#78716c;background:#f5f0eb;border:1px solid #e5e0d8;border-radius:99px;padding:2px 6px;white-space:nowrap">⏱ ${ageLabel} atrás</span>` : ''}
             </div>
-            <div class="m2-hero-value" style="color:${flagCss}">${bm.value} <span class="m2-hero-unit">${bm.unit}</span></div>
+            <div class="m2-hero-value" style="color:${flagCss}">${bm.value ?? '0'} <span class="m2-hero-unit">${bm.unit}</span></div>
             <div class="m2-flag" style="color:${flagCss}">${bm.flag}${bm.trendDir ? ` · ${bm.trendDir}` : ''}</div>
             ${isStale && !isNormal ? `<div style="margin-top:6px;padding:5px 8px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:10px;color:#92400e">⚠ Dato de hace ${ageLabel} — puede haber cambiado. Repetir estudio.</div>` : ''}
             ${bm.patientExplanation ? `<div class="m2-explanation">💬 ${bm.patientExplanation}</div>` : ''}
