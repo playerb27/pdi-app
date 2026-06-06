@@ -20,6 +20,119 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
   return { min: null, max: null };
 }
 
+// ── Full-width ZoneBarChart for single-point series ─────────────────────────
+// Mirrors the mini-card ZoneBarChart but stretched to full width inside the modal.
+function FullWidthZoneChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
+  const ref = parseRef(series.referenceRange);
+  const lastPt = series.points[series.points.length - 1];
+  const value = lastPt?.value ?? 0;
+  const flag = lastPt?.flag ?? 'Normal';
+  const lc = flagColor(flag);
+
+  const hasMin = ref.min !== null;
+  const hasMax = ref.max !== null;
+
+  // Build visual zones: Bajo | Normal | Alto
+  // The bar spans: [visualMin .. visualMax]
+  const pad = 0.35;
+  const visualMin = hasMin ? ref.min! * (1 - pad) : value * (1 - pad * 2);
+  const visualMax = hasMax ? ref.max! * (1 + pad) : value * (1 + pad * 2);
+  const total = visualMax - visualMin || 1;
+
+  // Position of the value dot as % from left
+  const pct = Math.min(Math.max(((value - visualMin) / total) * 100, 2), 98);
+
+  // Zone widths in %
+  const normalLeft = hasMin ? ((ref.min! - visualMin) / total) * 100 : 0;
+  const normalRight = hasMax ? ((ref.max! - visualMin) / total) * 100 : 100;
+  const normalWidth = normalRight - normalLeft;
+
+  const date = lastPt?.date
+    ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(lastPt.date) ? lastPt.date + 'T12:00:00' : lastPt.date)
+        .toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
+    : '';
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: 'rgba(255,255,255,0.03)',
+        border: `1px solid ${flag !== 'Normal' ? lc + '40' : 'rgba(255,255,255,0.1)'}`,
+        borderRadius: '16px',
+        padding: '24px 28px 28px',
+        cursor: 'pointer',
+        transition: 'all 0.2s',
+        position: 'relative',
+      }}
+      onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.06)'}
+      onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = 'rgba(255,255,255,0.03)'}
+    >
+      {/* edit hint */}
+      <div style={{ position: 'absolute', top: 14, right: 14, background: 'rgba(212,175,55,0.12)', border: '1px solid rgba(212,175,55,0.25)', borderRadius: 6, padding: '3px 8px', fontSize: 10, color: 'rgba(212,175,55,0.7)' }}>
+        clic para editar valores
+      </div>
+
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div>
+          <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: lc }}>{series.name}</p>
+          {series.referenceRange && <p style={{ margin: '3px 0 0', fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>Ref: {series.referenceRange} {series.unit}</p>}
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: 40, fontWeight: 900, color: lc, fontFamily: 'monospace' }}>{value}</span>
+          <span style={{ fontSize: 14, color: 'rgba(255,255,255,0.4)', marginLeft: 6 }}>{series.unit}</span>
+          {flag !== 'Normal' && (
+            <p style={{ margin: '4px 0 0', fontSize: 11, fontWeight: 700, color: lc, textAlign: 'right',
+              background: lc + '20', border: `1px solid ${lc}50`, borderRadius: 6, padding: '2px 8px', display: 'inline-block' }}>
+              {flag}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Zone bar */}
+      <div style={{ position: 'relative', height: 28, borderRadius: 99, overflow: 'hidden',
+        background: 'linear-gradient(to right, #3b82f680, #3b82f6aa)' }}>
+        {/* Normal zone (green) */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${normalLeft}%`, width: `${normalWidth}%`,
+          background: 'linear-gradient(to right, #22c55e99, #22c55ecc)', borderRadius: 0 }} />
+        {/* Alto zone (red) */}
+        <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${normalRight}%`, right: 0,
+          background: 'linear-gradient(to right, #ef444499, #ef4444cc)' }} />
+        {/* Value dot */}
+        <div style={{
+          position: 'absolute', top: '50%', left: `${pct}%`,
+          transform: 'translate(-50%, -50%)',
+          width: 22, height: 22, borderRadius: '50%',
+          background: lc, border: '3px solid #0a0a15',
+          boxShadow: `0 0 12px ${lc}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#0a0a15', opacity: 0.7 }} />
+        </div>
+      </div>
+
+      {/* Zone labels + value label */}
+      <div style={{ position: 'relative', marginTop: 8 }}>
+        {/* Value label above the dot */}
+        <div style={{ position: 'absolute', left: `${pct}%`, transform: 'translateX(-50%)',
+          bottom: '100%', marginBottom: 2,
+          fontSize: 12, fontWeight: 800, color: lc, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+          {value}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'rgba(255,255,255,0.35)', marginTop: 4 }}>
+          <span style={{ color: '#60a5fa', fontWeight: 700 }}>Bajo</span>
+          {hasMin && <span style={{ color: '#60a5fa', fontSize: 11 }}>{ref.min}</span>}
+          <span style={{ color: '#22c55e', fontWeight: 700 }}>Normal</span>
+          {hasMax && <span style={{ color: '#f87171', fontSize: 11 }}>{ref.max}</span>}
+          <span style={{ color: '#f87171', fontWeight: 700 }}>Alto</span>
+        </div>
+        {date && <p style={{ margin: '6px 0 0', fontSize: 10, color: 'rgba(255,255,255,0.2)', textAlign: 'right' }}>{date}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function FullWidthChart({ series, onClick }: { series: ChartSeries; onClick: () => void }) {
   const W = 700, H = 220;
   const PAD = { top: 28, right: 40, bottom: 44, left: 56 };
@@ -461,9 +574,11 @@ export default function ComparativeModal({ series: initialSeries, patientId, onC
 
           {/* Stacked charts */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {localSeries.map(s => (
-              <FullWidthChart key={s.name} series={s} onClick={() => setExpandedSeries(s)} />
-            ))}
+            {localSeries.map(s =>
+              s.points.length === 1
+                ? <FullWidthZoneChart key={s.name} series={s} onClick={() => setExpandedSeries(s)} />
+                : <FullWidthChart key={s.name} series={s} onClick={() => setExpandedSeries(s)} />
+            )}
           </div>
 
           <p style={{ margin: '20px 0 0', fontSize: '11px', color: 'rgba(255,255,255,0.2)', textAlign: 'center' }}>
