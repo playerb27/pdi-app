@@ -236,6 +236,22 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     // which would overwrite the local state we just set.
   };
 
+  // Propagate reference_range changes to setStudies — same principle as handleBiomarkerUpdated.
+  // Updates ALL biomarker rows across ALL studies whose canonical_name matches biomarkerName.
+  // This ensures BiomarkerMasterTable and EvolutionCharts both reflect the new limits
+  // without a page reload, exactly like value edits work.
+  const handleBiomarkerRangeUpdated = (biomarkerName: string, newRange: string) => {
+    setStudies(prev => prev.map(s => ({
+      ...s,
+      biomarkers: (s.biomarkers as any[]).map(b => {
+        const bName = (b as any).canonical_name ?? b.name;
+        const matches = bName?.toLowerCase() === biomarkerName.toLowerCase();
+        return matches ? { ...b, reference_range: newRange } : b;
+      }),
+    })));
+  };
+
+
 
   // Biomarker inline edit state
   const [editBm, setEditBm] = useState<{ bm: Biomarker; studyId: string } | null>(null);
@@ -1505,6 +1521,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                     onBiomarkerUpdated={(studyId, biomarkerId, newValue, newFlag) => {
                       handleBiomarkerUpdated(biomarkerId, newValue, newFlag, studyId);
                     }}
+                    onBiomarkerRangeUpdated={handleBiomarkerRangeUpdated}
                   />
                 </>
               ) : (

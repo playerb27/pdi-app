@@ -32,6 +32,10 @@ interface Props {
   selectedForCompare?: Set<string>;
   onToggleCompare?: (name: string) => void;
   onBiomarkerUpdated?: (studyId: string, biomarkerId: string, newValue: string, newFlag: string) => void;
+  /** Called when the user saves new reference limits in the modal.
+   *  Receives the canonical biomarker name and the new range string (e.g. "20 - 450").
+   *  The page should propagate this to setStudies so BiomarkerMasterTable updates too. */
+  onBiomarkerRangeUpdated?: (biomarkerName: string, newRange: string) => void;
   showOnlySuspicious?: boolean;
   showOnlyOutOfRange?: boolean;
   onSeriesReady?: (map: Record<string, { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string; biomarkerId?: string; studyId?: string; isEdited?: boolean; originalValue?: string | null }[] }>) => void;
@@ -460,7 +464,7 @@ function ZoneBarChart({
   );
 }
 
-export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, showOnlyOutOfRange, onSeriesReady, documents }: Props) {
+export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, onBiomarkerRangeUpdated, showOnlySuspicious, showOnlyOutOfRange, onSeriesReady, documents }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
   // Local overrides for reference ranges — applied on top of timeSeriesMap
@@ -794,8 +798,11 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
             if (!expandedSeries) return;
             // 1. Update the modal's own series so the chart re-renders immediately
             setExpandedSeries(prev => prev ? { ...prev, referenceRange: newRange } : null);
-            // 2. Propagate to all mini-cards via the overrides map
+            // 2. Propagate to all mini-cards via local overrides (instant, no reload)
             setRangeOverrides(prev => ({ ...prev, [expandedSeries.name]: newRange }));
+            // 3. Propagate to page-level setStudies — same path as value edits —
+            //    so BiomarkerMasterTable also updates without a page reload.
+            onBiomarkerRangeUpdated?.(expandedSeries.name, newRange);
           }}
         />
       )}
