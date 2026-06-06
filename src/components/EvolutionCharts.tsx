@@ -451,6 +451,9 @@ function ZoneBarChart({
 export default function EvolutionCharts({ studies, patientId, glowId, compareMode, selectedForCompare, onToggleCompare, onBiomarkerUpdated, showOnlySuspicious, showOnlyOutOfRange, onSeriesReady, documents }: Props) {
   const [selectedSystem, setSelectedSystem] = useState<string | null>(null);
   const [expandedSeries, setExpandedSeries] = useState<ChartSeries | null>(null);
+  // Local overrides for reference ranges — applied on top of timeSeriesMap
+  // so mini-cards update immediately after the user saves new limits in the modal.
+  const [rangeOverrides, setRangeOverrides] = useState<Record<string, string>>({});
 
   const timeSeriesMap = useMemo<Record<string, BiomarkerTimeSeries>>(() => {
     const map: Record<string, BiomarkerTimeSeries> = {};
@@ -592,9 +595,18 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
   // Must be useEffect (not useMemo) — calling parent setState during render is illegal in React 19
   useEffect(() => { onSeriesReady?.(timeSeriesMap); }, [timeSeriesMap, onSeriesReady]);
 
-  // Apply localStorage overrides AFTER dedup — user edits always win
-  // NOTE: overrides now come from Supabase (is_edited flag), no localStorage needed.
-  const displaySeriesMap = timeSeriesMap;
+  // Apply rangeOverrides on top of timeSeriesMap so mini-cards show updated limits
+  // immediately without a page reload.
+  const displaySeriesMap = useMemo(() => {
+    if (Object.keys(rangeOverrides).length === 0) return timeSeriesMap;
+    const patched: Record<string, BiomarkerTimeSeries> = {};
+    for (const [key, series] of Object.entries(timeSeriesMap)) {
+      patched[key] = rangeOverrides[key]
+        ? { ...series, referenceRange: rangeOverrides[key] }
+        : series;
+    }
+    return patched;
+  }, [timeSeriesMap, rangeOverrides]);
 
   const allSeries = Object.values(displaySeriesMap);
   const hasSuspicious = (s: BiomarkerTimeSeries) => s.points.some(p => p.suspicious);
@@ -760,6 +772,13 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
                 : null
               );
             }
+          }}
+          onRangeUpdated={(newRange) => {
+            if (!expandedSeries) return;
+            // 1. Update the modal's own series so the chart re-renders immediately
+            setExpandedSeries(prev => prev ? { ...prev, referenceRange: newRange } : null);
+            // 2. Propagate to all mini-cards via the overrides map
+            setRangeOverrides(prev => ({ ...prev, [expandedSeries.name]: newRange }));
           }}
         />
       )}
