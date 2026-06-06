@@ -99,7 +99,19 @@ function EditableCell({ cell, row, documents, onSave }: {
   const handleSave = async () => {
     if (!cell.biomarkerId) return;
     const num = parseFloat(val.replace(',', '.'));
-    const newFlag = isNaN(num) ? cell.flag : (computeFlag(row.name, num) ?? cell.flag);
+    // Use DB-stored reference range from the row (DB > catalog), same as visual bar
+    let newFlag = cell.flag;
+    if (!isNaN(num)) {
+      if (row.refMin !== null && row.refMax !== null) {
+        newFlag = num > row.refMax ? 'Alto' : num < row.refMin ? 'Bajo' : 'Normal';
+      } else if (row.refMax !== null) {
+        newFlag = num > row.refMax ? 'Alto' : 'Normal';
+      } else if (row.refMin !== null) {
+        newFlag = num < row.refMin ? 'Bajo' : 'Normal';
+      } else {
+        newFlag = computeFlag(row.name, num) ?? cell.flag;
+      }
+    }
     setSaving(true);
     // Clean replace — no originalValue tracking
     const ok = await updateBiomarker(cell.biomarkerId, {
@@ -251,8 +263,17 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         if (isNaN(num) && !isMeaningfulText) continue;
         if ((bm as any).flag === 'Excluido') continue;  // doctor marked as "no graficar"
 
+        // Compute flag using DB-sourced ranges first (same priority as the visual bar)
+        // so that doctor-configured limits are always respected.
+        let flag: string;
+        if (isNaN(num)) {
+          flag = (bm.flag as any) ?? 'Normal';
+        } else {
+          // We'll compute after we know bmRefMin/bmRefMax (below)
+          flag = (bm.flag as any) ?? 'Normal'; // placeholder, will be overridden
+        }
+
         const catalogEntry = getCatalogEntry(canonical);
-        const flag = isNaN(num) ? (bm.flag as any) ?? 'Normal' : (computeFlag(canonical, num) ?? (bm.flag as any) ?? 'Normal');
         const displayName = catalogEntry?.name ?? rawCanonical;
 
         // ── Reference range: DB first, catalog as fallback ───────────────────
@@ -273,6 +294,19 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         if (bmRefMin === null && bmRefMax === null) {
           bmRefMin = catalogEntry?.refMin ?? null;
           bmRefMax = catalogEntry?.refMax ?? null;
+        }
+
+        // Now compute the final flag using the resolved ranges (DB > catalog)
+        if (!isNaN(num)) {
+          if (bmRefMin !== null && bmRefMax !== null) {
+            flag = num > bmRefMax ? 'Alto' : num < bmRefMin ? 'Bajo' : 'Normal';
+          } else if (bmRefMax !== null) {
+            flag = num > bmRefMax ? 'Alto' : 'Normal';
+          } else if (bmRefMin !== null) {
+            flag = num < bmRefMin ? 'Bajo' : 'Normal';
+          } else {
+            flag = computeFlag(canonical, num) ?? flag;
+          }
         }
 
         if (!dataMap[canonical]) {
@@ -299,7 +333,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         const incoming: CellData = {
           value: isNaN(num) ? 0 : num,
           rawValue: rawStr,
-          flag,
+          flag: flag as 'Normal' | 'Alto' | 'Bajo',
           biomarkerId: (bm as any).id,
           studyId: study.id,
           isEdited: (bm as any).is_edited,
