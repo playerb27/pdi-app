@@ -490,13 +490,12 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
             name: canonicalName,
             unit: bm.unit,
             system: getCatalogEntry(canonicalName)?.system ?? bm.system ?? (bm as any).canonical_system ?? 'Otros Marcadores',
-            referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range ?? undefined,
+            referenceRange: (bm as any).reference_range ?? undefined,
             points: [],
           };
         } else {
-          // Always update referenceRange with newest non-null value — studies are sorted
-          // chronologically so the last one encountered wins, which is what the doctor edited most recently.
-          const freshRange = (bm as any).referenceRange ?? (bm as any).reference_range;
+          // Always update referenceRange with newest non-null value from DB (snake_case only)
+          const freshRange = (bm as any).reference_range;
           if (freshRange) map[canonicalName].referenceRange = freshRange;
         }
         map[canonicalName].points.push({

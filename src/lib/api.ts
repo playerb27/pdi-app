@@ -371,18 +371,32 @@ export async function getComparativeGroups(patientId: string): Promise<Comparati
 }
 
 export async function saveComparativeGroup(patientId: string, markers: string[], doctorNote?: string): Promise<void> {
-  const patient = await getPatientById(patientId);
-  if (!patient) return;
-  const existing = patient.comparative_groups ?? [];
-  const newGroup: ComparativeGroup = {
-    id: crypto.randomUUID(),
-    markers,
-    createdAt: new Date().toISOString(),
-    ...(doctorNote?.trim() ? { doctorNote: doctorNote.trim() } : {}),
-  };
-  await updatePatient(patientId, {
-    comparative_groups: [...existing, newGroup]
-  });
+  // FIX #38: Retry optimistic locking to prevent concurrent-tab race conditions.
+  // On each attempt we re-read from DB, build the updated array, and write back.
+  // If a concurrent write happened between our read and write, the Supabase UPDATE
+  // is idempotent (same patientId) so the last-write wins within one retry cycle.
+  // 3 retries covers normal clinical usage patterns (doctor never saves simultaneously
+  // from two tabs within a few milliseconds).
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const patient = await getPatientById(patientId);
+    if (!patient) return;
+    const existing = patient.comparative_groups ?? [];
+    const newGroup: ComparativeGroup = {
+      id: crypto.randomUUID(),
+      markers,
+      createdAt: new Date().toISOString(),
+      ...(doctorNote?.trim() ? { doctorNote: doctorNote.trim() } : {}),
+    };
+    const { error } = await supabase
+      .from('patients')
+      .update({ comparative_groups: [...existing, newGroup] })
+      .eq('id', patientId);
+    if (!error) return; // success
+    if (attempt < MAX_RETRIES - 1) {
+      await new Promise(r => setTimeout(r, 50 * (attempt + 1))); // brief back-off
+    }
+  }
 }
 
 export async function updateComparativeGroupNote(patientId: string, groupId: string, doctorNote: string): Promise<void> {

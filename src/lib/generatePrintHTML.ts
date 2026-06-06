@@ -136,22 +136,42 @@ export function buildSeriesForPrint(
   const target = norm(markerName);
   const points: { date: string; value: number; flag: string }[] = [];
   let unit = '', refRange: string | undefined;
+
   for (const study of allStudies) {
-    // Match by canonical_name first (most reliable), then by normalized raw name
-    const bm = (study.biomarkers ?? []).find((b: any) =>
+    // Collect ALL matching biomarkers in this study (same as EvolutionCharts dedup logic)
+    const matches: any[] = (study.biomarkers ?? []).filter((b: any) =>
       (b.canonical_name && norm(b.canonical_name) === target) || norm(b.name) === target
     );
-    if (!bm) continue;
-    const v = parseFloat(bm.value);
+    if (matches.length === 0) continue;
+
+    // Deduplication: prefer is_edited, then pick the one whose value is closest to the
+    // median of all candidates (mirrors EvolutionCharts IQR-based dedup).
+    let chosen = matches.find((b: any) => b.is_edited) ?? matches[0];
+    if (matches.length > 1 && !matches.some((b: any) => b.is_edited)) {
+      const nums = matches.map((b: any) => parseFloat(b.value)).filter((n) => !isNaN(n));
+      if (nums.length > 0) {
+        const sorted = [...nums].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+        chosen = matches.reduce((best: any, bm: any) => {
+          const diff = Math.abs(parseFloat(bm.value) - median);
+          const bestDiff = Math.abs(parseFloat(best.value) - median);
+          return diff < bestDiff ? bm : best;
+        }, matches[0]);
+      }
+    }
+
+    const v = parseFloat(chosen.value);
     if (isNaN(v)) continue;
+
     // Date priority: exam_date > filename date > created_at (same as live UI)
     const fileDate = study.file_name?.match(/(\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
     const rawDate = (study as any).exam_date ?? (fileDate ? fileDate + 'T12:00:00' : null) ?? study.created_at;
-    points.push({ date: rawDate, value: v, flag: bm.flag ?? 'Normal' });
-    if (!unit) unit = bm.unit ?? '';
-    // Always take the most recent range (no guard) so custom DB limits win over older ones
-    if (bm.reference_range) refRange = bm.reference_range;
+    points.push({ date: rawDate, value: v, flag: chosen.flag ?? 'Normal' });
+    if (!unit) unit = chosen.unit ?? '';
+    // Always take the most recent range so custom DB limits win over older ones
+    if (chosen.reference_range) refRange = chosen.reference_range;
   }
+
   if (points.length === 0) return null;
   points.sort((a, b) => {
     const fixDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d + 'T12:00:00' : d;

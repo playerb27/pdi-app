@@ -205,18 +205,22 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
     if (glowId) {
       // Smart merge: update individual biomarker rows without full re-render
       // This keeps glow animation alive while ensuring new data reaches the table
+      // FIX #19: compare by biomarker.id (not array index) — Supabase may return
+      // biomarkers in different order after an update, so index-based comparison
+      // was comparing wrong biomarkers, causing false-positives and animation breaks.
       setLocalStudies(prev => {
         const prevMap = new Map(prev.map(s => [s.id, s]));
         return studies.map(s => {
           const prevStudy = prevMap.get(s.id);
           if (!prevStudy) return s; // new study
-          // Check if biomarkers changed at all
           const prevBms = (prevStudy.biomarkers ?? []) as any[];
           const newBms = (s.biomarkers ?? []) as any[];
-          const changed = newBms.some((bm: any, i: number) => {
-            const prev = prevBms[i];
+          // Build a map of previous biomarkers by their DB id for stable comparison
+          const prevBmMap = new Map(prevBms.map((b: any) => [b.id, b]));
+          const changed = newBms.some((bm: any) => {
+            const prev = prevBmMap.get(bm.id);
             return !prev || prev.value !== bm.value || prev.flag !== bm.flag || prev.reference_range !== bm.reference_range;
-          });
+          }) || newBms.length !== prevBms.length;
           return changed ? { ...prevStudy, biomarkers: newBms } : prevStudy;
         });
       });
@@ -299,7 +303,7 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
         // ── Reference range: DB first, catalog as fallback ───────────────────
         // reference_range stored in Supabase always takes priority over the
         // hard-coded catalog so that doctor-configured limits are respected.
-        const dbRange: string | undefined = (bm as any).reference_range ?? (bm as any).referenceRange;
+        const dbRange: string | undefined = (bm as any).reference_range;
         let bmRefMin: number | null = null;
         let bmRefMax: number | null = null;
         if (dbRange) {

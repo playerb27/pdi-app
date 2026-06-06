@@ -40,9 +40,18 @@ export async function PATCH(
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // MEDICAL SAFETY: original_value is always wiped to null on every value edit.
+    // Build update payload (original_value is always wiped to null on value edits)
     const payload: Record<string, any> = {};
+
+    // FIX #8: Validate flag against allowed values before writing to DB
     if (updatingValue) {
+      const VALID_FLAGS = ['Normal', 'Alto', 'Bajo', 'Excluido'];
+      if (!VALID_FLAGS.includes(String(flag))) {
+        return NextResponse.json(
+          { error: `Flag inválido: "${flag}". Debe ser uno de: ${VALID_FLAGS.join(', ')}` },
+          { status: 400 }
+        );
+      }
       payload.value = String(value);
       payload.flag = String(flag);
       payload.is_edited = true;
@@ -120,6 +129,21 @@ export async function DELETE(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
+
+    // FIX #7: Use count to verify a row was actually deleted.
+    // We do a SELECT first to check existence, then DELETE.
+    const { data: existing } = await sb
+      .from('biomarkers')
+      .select('id')
+      .eq('id', biomarkerId)
+      .maybeSingle();
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: `Biomarker con id "${biomarkerId}" no encontrado` },
+        { status: 404 }
+      );
+    }
 
     const { error } = await sb
       .from('biomarkers')
