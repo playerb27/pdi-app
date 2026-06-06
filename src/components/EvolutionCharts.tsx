@@ -244,15 +244,27 @@ function ZoneBarChart({
   const fc = flagColor(pt.flag, pt.isEdited);
   const [hovered, setHovered] = useState(false);
 
+  // Priority: DB value (series.referenceRange from Supabase) > catalog defaults
+  // The catalog is only a fallback when the DB has no stored range.
   const catalog = getCatalogEntry(series.name);
-  let refMin: number | null = catalog?.refMin ?? null;
-  let refMax: number | null = catalog?.refMax ?? null;
-  if ((refMin === null || refMax === null) && series.referenceRange) {
-    const parts = series.referenceRange.split(/[-–]/).map(s => parseFloat(s.trim()));
-    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-      if (refMin === null) refMin = parts[0];
-      if (refMax === null) refMax = parts[1];
-    }
+  let refMin: number | null = null;
+  let refMax: number | null = null;
+
+  if (series.referenceRange) {
+    // Parse from DB first — this is always the source of truth
+    const rr = series.referenceRange;
+    const rangeMatch = rr.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
+    const ltMatch = rr.match(/[<≤]\s*(\d+\.?\d*)/);
+    const gtMatch = rr.match(/[>≥]\s*(\d+\.?\d*)/);
+    if (rangeMatch) { refMin = parseFloat(rangeMatch[1]); refMax = parseFloat(rangeMatch[2]); }
+    else if (ltMatch) { refMax = parseFloat(ltMatch[1]); }
+    else if (gtMatch) { refMin = parseFloat(gtMatch[1]); }
+  }
+
+  // Fall back to catalog only if DB had nothing useful
+  if (refMin === null && refMax === null && catalog) {
+    refMin = catalog.refMin ?? null;
+    refMax = catalog.refMax ?? null;
   }
 
   // Axis: value + refs with 25% breathing room on each side
@@ -477,9 +489,14 @@ export default function EvolutionCharts({ studies, patientId, glowId, compareMod
             name: canonicalName,
             unit: bm.unit,
             system: getCatalogEntry(canonicalName)?.system ?? bm.system ?? (bm as any).canonical_system ?? 'Otros Marcadores',
-            referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range,
+            referenceRange: (bm as any).referenceRange ?? (bm as any).reference_range ?? undefined,
             points: [],
           };
+        } else {
+          // Always update referenceRange with newest non-null value — studies are sorted
+          // chronologically so the last one encountered wins, which is what the doctor edited most recently.
+          const freshRange = (bm as any).referenceRange ?? (bm as any).reference_range;
+          if (freshRange) map[canonicalName].referenceRange = freshRange;
         }
         map[canonicalName].points.push({
           date: getStudyDate(study),
