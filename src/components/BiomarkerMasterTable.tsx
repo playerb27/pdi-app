@@ -253,19 +253,45 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
 
         const catalogEntry = getCatalogEntry(canonical);
         const flag = isNaN(num) ? (bm.flag as any) ?? 'Normal' : (computeFlag(canonical, num) ?? (bm.flag as any) ?? 'Normal');
-        // Use catalog's properly-cased name for display; fall back to original pre-lowercase canonical
         const displayName = catalogEntry?.name ?? rawCanonical;
+
+        // ── Reference range: DB first, catalog as fallback ───────────────────
+        // reference_range stored in Supabase always takes priority over the
+        // hard-coded catalog so that doctor-configured limits are respected.
+        const dbRange: string | undefined = (bm as any).reference_range ?? (bm as any).referenceRange;
+        let bmRefMin: number | null = null;
+        let bmRefMax: number | null = null;
+        if (dbRange) {
+          const rangeMatch = dbRange.match(/(\d+\.?\d*)\s*[-–]\s*(\d+\.?\d*)/);
+          const ltMatch = dbRange.match(/[<≤]\s*(\d+\.?\d*)/);
+          const gtMatch = dbRange.match(/[>≥]\s*(\d+\.?\d*)/);
+          if (rangeMatch) { bmRefMin = parseFloat(rangeMatch[1]); bmRefMax = parseFloat(rangeMatch[2]); }
+          else if (ltMatch) { bmRefMax = parseFloat(ltMatch[1]); }
+          else if (gtMatch) { bmRefMin = parseFloat(gtMatch[1]); }
+        }
+        // Fall back to catalog only if DB had nothing
+        if (bmRefMin === null && bmRefMax === null) {
+          bmRefMin = catalogEntry?.refMin ?? null;
+          bmRefMax = catalogEntry?.refMax ?? null;
+        }
 
         if (!dataMap[canonical]) {
           dataMap[canonical] = {
             name: displayName,
             unit: catalogEntry?.unit ?? bm.unit,
-            refMin: catalogEntry?.refMin ?? null,
-            refMax: catalogEntry?.refMax ?? null,
+            refMin: bmRefMin,
+            refMax: bmRefMax,
             system: catalogEntry?.system ?? (bm as any).canonical_system ?? bm.system ?? 'Otros Marcadores',
             isFromCatalog: !!catalogEntry,
             cells: {},
           };
+        } else {
+          // Update refMin/refMax if this row has a DB-sourced range — studies are
+          // sorted chronologically so the last encountered is the most recent edit.
+          if (dbRange) {
+            dataMap[canonical].refMin = bmRefMin;
+            dataMap[canonical].refMax = bmRefMax;
+          }
         }
 
         // Keep one value per study date — prioritize is_edited rows over non-edited duplicates.
