@@ -141,7 +141,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
       originalValue: null,
     } : p);
     setPoints(updated);
-    onValueUpdated?.(pt.biomarkerId, editVal, editFlag, pt.studyId ?? '');
+    // BUG-38 fix: if pt.studyId is missing, find it from the points array (same series = same study)
+    const studyIdForUpdate = pt.studyId ?? points.find(p => p.studyId)?.studyId ?? '';
+    onValueUpdated?.(pt.biomarkerId, editVal, editFlag, studyIdForUpdate);
 
     setSaveStatus({ ok: true, msg: `✅ Guardado. Valor en base de datos: ${editVal}` });
     setSaving(false);
@@ -179,10 +181,11 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
       return;
     }
 
-    let newRange = '';
-    if (minVal !== null && maxVal !== null) newRange = `${minVal} - ${maxVal}`;
-    else if (maxVal !== null) newRange = `< ${maxVal}`;
-    else if (minVal !== null) newRange = `> ${minVal}`;
+    // BUG-41 fix: save null when no limits are set so DB stores NULL (falsy),
+    // not empty string (which looks truthy but won't propagate through 'if (freshRange)' checks)
+    const newRange: string | null = minVal !== null || maxVal !== null
+      ? (minVal !== null && maxVal !== null ? `${minVal} - ${maxVal}` : minVal !== null ? `> ${minVal}` : `< ${maxVal}`)
+      : null;
 
     const ids = points.map(p => p.biomarkerId).filter((id): id is string => !!id);
     if (ids.length === 0) {
@@ -192,7 +195,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
 
     setSavingRange(true);
     setRangeStatus(null);
-    const ok = await updateBiomarkerRange(ids, newRange);
+    const ok = await updateBiomarkerRange(ids, newRange ?? '');
 
     if (!ok) {
       setRangeStatus({ ok: false, msg: '❌ Error al guardar los límites. Intenta de nuevo.' });
@@ -200,8 +203,8 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
       return;
     }
 
-    setRefRange(newRange);
-    onRangeUpdated?.(newRange);
+    setRefRange(newRange ?? '');
+    onRangeUpdated?.(newRange ?? '');
     setRangeStatus({ ok: true, msg: `✅ Límites actualizados: ${newRange || 'sin límites'}` });
     setSavingRange(false);
     setShowRangeEdit(false);

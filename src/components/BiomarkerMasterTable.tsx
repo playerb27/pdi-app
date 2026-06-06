@@ -197,10 +197,29 @@ export default function BiomarkerMasterTable({ studies, patientId, patientBirthD
   const [filterSystem, setFilterSystem] = useState<string | null>(null);
 
   // Keep local state in sync when parent changes.
-  // IMPORTANT: Skip sync while glowId is active — re-rendering the table
-  // destroys the CSS animation on the highlighted row.
+  // BUG-11 fix: always sync — don't block on glowId. Instead do a smart merge:
+  // only replace rows whose biomarker data actually changed, so the table data
+  // stays current (range saves, value saves) even while a search is highlighted.
   useEffect(() => {
-    if (!glowId) {
+    if (glowId) {
+      // Smart merge: update individual biomarker rows without full re-render
+      // This keeps glow animation alive while ensuring new data reaches the table
+      setLocalStudies(prev => {
+        const prevMap = new Map(prev.map(s => [s.id, s]));
+        return studies.map(s => {
+          const prevStudy = prevMap.get(s.id);
+          if (!prevStudy) return s; // new study
+          // Check if biomarkers changed at all
+          const prevBms = (prevStudy.biomarkers ?? []) as any[];
+          const newBms = (s.biomarkers ?? []) as any[];
+          const changed = newBms.some((bm: any, i: number) => {
+            const prev = prevBms[i];
+            return !prev || prev.value !== bm.value || prev.flag !== bm.flag || prev.reference_range !== bm.reference_range;
+          });
+          return changed ? { ...prevStudy, biomarkers: newBms } : prevStudy;
+        });
+      });
+    } else {
       setLocalStudies(studies);
     }
   }, [studies, glowId]);

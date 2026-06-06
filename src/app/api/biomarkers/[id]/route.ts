@@ -71,16 +71,21 @@ export async function PATCH(
       );
     }
 
-    // Verify the value actually changed in DB (only when updating a clinical value)
-    if (updatingValue && updated.value !== String(value)) {
-      console.error('[PATCH /api/biomarkers] Value mismatch after update:', {
-        expected: value,
-        actual: updated.value,
-      });
-      return NextResponse.json(
-        { error: 'El valor no se actualizó correctamente en la base de datos' },
-        { status: 500 }
-      );
+    // BUG-33 fix: compare numerically to avoid false-positives for '9.80' vs '9.8'
+    if (updatingValue) {
+      const expectedNum = parseFloat(String(value));
+      const actualNum = parseFloat(updated.value ?? '');
+      const mismatch = isNaN(expectedNum) ? updated.value !== String(value) : Math.abs(expectedNum - actualNum) > 0.000001;
+      if (mismatch) {
+        console.error('[PATCH /api/biomarkers] Value mismatch after update:', {
+          expected: value,
+          actual: updated.value,
+        });
+        return NextResponse.json(
+          { error: 'El valor no se actualizó correctamente en la base de datos' },
+          { status: 500 }
+        );
+      }
     }
 
     return NextResponse.json({

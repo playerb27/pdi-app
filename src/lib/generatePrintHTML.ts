@@ -78,7 +78,9 @@ export function svgForSeries(
   }).join('');
 
   const xlabels = s.points.map((pt, i) => {
-    const d = new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+    const rawDate = pt.date;
+    const fixedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate + 'T12:00:00' : rawDate;
+    const d = new Date(fixedDate).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
     return `<text x="${toX(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)">${d}</text>`;
   }).join('');
 
@@ -144,13 +146,17 @@ export function buildSeriesForPrint(
   const points: { date: string; value: number; flag: string }[] = [];
   let unit = '', refRange: string | undefined;
   for (const study of allStudies) {
-    const bm = (study.biomarkers ?? []).find((b: any) => norm(b.name) === target);
+    // Match by canonical_name first (most reliable), then by normalized raw name
+    const bm = (study.biomarkers ?? []).find((b: any) =>
+      (b.canonical_name && norm(b.canonical_name) === target) || norm(b.name) === target
+    );
     if (!bm) continue;
     const v = parseFloat(bm.value);
     if (isNaN(v)) continue;
     points.push({ date: study.exam_date ?? study.created_at, value: v, flag: bm.flag ?? 'Normal' });
     if (!unit) unit = bm.unit ?? '';
-    if (!refRange && bm.reference_range) refRange = bm.reference_range;
+    // Always take the most recent range (no guard) so custom DB limits win over older ones
+    if (bm.reference_range) refRange = bm.reference_range;
   }
   if (points.length === 0) return null;
   points.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -483,7 +489,7 @@ export function generatePrintHTML(
             ${bm.unit ?? ''}
           </td>
           <td style="padding:7px 14px;font-size:10.5px;color:#6b7280;text-align:right;white-space:nowrap">
-            ${bm.referenceRange ?? '—'}
+            ${(bm as any).referenceRange ?? (bm as any).reference_range ?? '—'}
           </td>
         </tr>`;
       }).join('');
