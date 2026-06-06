@@ -1587,9 +1587,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                             <button
                               onClick={async () => {
                                 setSavingNoteIdx(i);
-                                await saveAiNote(id, prevUserMsg, msg.text);
-                                setSavedNoteIdxs(prev => new Set(prev).add(i));
+                                const result = await saveAiNote(id, prevUserMsg, msg.text);
                                 setSavingNoteIdx(null);
+                                if (result.success) {
+                                  setSavedNoteIdxs(prev => new Set(prev).add(i));
+                                } else {
+                                  alert(`❌ Error al guardar en reporte:\n\n${result.error}\n\nContacta soporte con este mensaje.`);
+                                }
                               }}
                               disabled={savingNoteIdx === i || savedNoteIdxs.has(i)}
                               style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '3px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, fontFamily: 'var(--font-main)', cursor: savingNoteIdx === i || savedNoteIdxs.has(i) ? 'default' : 'pointer', border: `1px solid ${savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.4)' : 'rgba(212,175,55,0.3)'}`, background: savedNoteIdxs.has(i) ? 'rgba(34,197,94,0.08)' : 'rgba(212,175,55,0.06)', color: savedNoteIdxs.has(i) ? '#22c55e' : 'var(--gold-primary)', transition: 'all 0.2s' }}

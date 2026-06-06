@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { X, Edit2, Check, ChevronLeft, ChevronRight, Eye } from 'lucide-react';
-import { updateBiomarker, deleteBiomarker } from '@/lib/api';
+import { X, Edit2, Check, ChevronLeft, ChevronRight, Eye, Settings2 } from 'lucide-react';
+import { updateBiomarker, updateBiomarkerRange, deleteBiomarker } from '@/lib/api';
 
 export interface ChartPoint {
   date: string;
@@ -42,10 +42,11 @@ interface Props {
   patientId: string;
   onClose: () => void;
   onValueUpdated?: (biomarkerId: string, newValue: string, newFlag: string, studyId: string) => void;
+  onRangeUpdated?: (newRange: string) => void;
   documents?: any[];
 }
 
-export default function ExpandedChartModal({ series, patientId, onClose, onValueUpdated, documents }: Props) {
+export default function ExpandedChartModal({ series, patientId, onClose, onValueUpdated, onRangeUpdated, documents }: Props) {
   const gradId = `exp-area-grad-${series.name.replace(/\W/g, '')}`;
   const [points, setPoints] = useState<ChartPoint[]>(series.points.filter(p => p.flag !== 'Excluido'));
   const [editIdx, setEditIdx] = useState<number | null>(null);
@@ -55,19 +56,35 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
   const [tooltip, setTooltip] = useState<{ i: number; x: number; y: number } | null>(null);
   const [saveStatus, setSaveStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
-  // Sync internal points when parent series changes
+  // Reference range local state (editable)
+  const [refRange, setRefRange] = useState(series.referenceRange ?? '');
+  const [showRangeEdit, setShowRangeEdit] = useState(false);
+  const [refMinEdit, setRefMinEdit] = useState('');
+  const [refMaxEdit, setRefMaxEdit] = useState('');
+  const [savingRange, setSavingRange] = useState(false);
+  const [rangeStatus, setRangeStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
   useEffect(() => {
     if (editIdx === null && !saving) {
       setPoints(series.points.filter(p => p.flag !== 'Excluido'));
     }
   }, [series.points, series.name]);
 
+  // When opening range editor pre-fill with current values
+  useEffect(() => {
+    if (showRangeEdit) {
+      const parsed = parseRef(refRange);
+      setRefMinEdit(parsed.min !== null ? String(parsed.min) : '');
+      setRefMaxEdit(parsed.max !== null ? String(parsed.max) : '');
+    }
+  }, [showRangeEdit]);
+
   const W = 720, H = 300;
   const PAD = { top: 40, right: 32, bottom: 48, left: 56 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
 
-  const ref = parseRef(series.referenceRange);
+  const ref = parseRef(refRange);
   const values = points.map(p => p.value);
   const refVals = [ref.min, ref.max].filter((v): v is number => v !== null && v !== undefined) as number[];
   const allVals = [...values, ...refVals];
@@ -105,11 +122,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
     setSaving(true);
     setSaveStatus(null);
 
-    // Clean replace — old value is gone from Supabase completely
-    const ok = await updateBiomarker(pt.biomarkerId, {
-      value: editVal,
-      flag: editFlag,
-    });
+    const ok = await updateBiomarker(pt.biomarkerId, { value: editVal, flag: editFlag });
 
     if (!ok) {
       setSaveStatus({ ok: false, msg: '❌ Error al guardar. El valor NO se actualizó. Intenta de nuevo.' });
@@ -118,7 +131,6 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
       return;
     }
 
-    // Update local state only after confirmed DB write
     const newNumVal = parseFloat(editVal);
     const safeNewVal = isNaN(newNumVal) ? pt.value : newNumVal;
     const updated = points.map((p, i) => i === editIdx ? {
@@ -126,7 +138,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
       value: safeNewVal,
       flag: editFlag,
       isEdited: true,
-      originalValue: null,  // wiped
+      originalValue: null,
     } : p);
     setPoints(updated);
     onValueUpdated?.(pt.biomarkerId, editVal, editFlag, pt.studyId ?? '');
@@ -139,29 +151,60 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
   const handleExclude = async () => {
     if (editIdx === null) return;
     const pt = points[editIdx];
-
     if (!pt.biomarkerId) {
-      alert('Este punto no tiene ID en la base de datos.\nEdita su valor manualmente o elimina el estudio completo.');
+      alert('Este punto no tiene ID en la base de datos.');
       setEditIdx(null);
       return;
     }
-
     setSaving(true);
-    // DELETE the row from Supabase — the only approach that guarantees
-    // the point never reappears on page reload.
     const ok = await deleteBiomarker(pt.biomarkerId);
-
     if (!ok) {
-      alert('No se pudo eliminar de la base de datos. El punto sigue activo.');
+      alert('No se pudo eliminar de la base de datos.');
       setSaving(false);
       return;
     }
-
-    // Confirmed deleted — remove from local view and notify parent
     setPoints(prev => prev.filter((_, i) => i !== editIdx));
     onValueUpdated?.(pt.biomarkerId, String(pt.value), 'Excluido', pt.studyId ?? '');
     setSaving(false);
     setEditIdx(null);
+  };
+
+  // Save reference range to ALL biomarker rows in the series
+  const handleSaveRange = async () => {
+    const minVal = refMinEdit.trim() !== '' ? parseFloat(refMinEdit) : null;
+    const maxVal = refMaxEdit.trim() !== '' ? parseFloat(refMaxEdit) : null;
+
+    if ((refMinEdit.trim() !== '' && isNaN(minVal!)) || (refMaxEdit.trim() !== '' && isNaN(maxVal!))) {
+      setRangeStatus({ ok: false, msg: '⚠️ Ingresa valores numéricos válidos.' });
+      return;
+    }
+
+    let newRange = '';
+    if (minVal !== null && maxVal !== null) newRange = `${minVal} - ${maxVal}`;
+    else if (maxVal !== null) newRange = `< ${maxVal}`;
+    else if (minVal !== null) newRange = `> ${minVal}`;
+
+    const ids = points.map(p => p.biomarkerId).filter((id): id is string => !!id);
+    if (ids.length === 0) {
+      setRangeStatus({ ok: false, msg: '⚠️ No se encontraron IDs de base de datos para actualizar.' });
+      return;
+    }
+
+    setSavingRange(true);
+    setRangeStatus(null);
+    const ok = await updateBiomarkerRange(ids, newRange);
+
+    if (!ok) {
+      setRangeStatus({ ok: false, msg: '❌ Error al guardar los límites. Intenta de nuevo.' });
+      setSavingRange(false);
+      return;
+    }
+
+    setRefRange(newRange);
+    onRangeUpdated?.(newRange);
+    setRangeStatus({ ok: true, msg: `✅ Límites actualizados: ${newRange || 'sin límites'}` });
+    setSavingRange(false);
+    setShowRangeEdit(false);
   };
 
   const yGridLines = 5;
@@ -174,9 +217,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
           <div>
             <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#fff', letterSpacing: '-0.5px' }}>{series.name}</h2>
-            {series.referenceRange && (
+            {refRange && (
               <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
-                Rango de referencia: <span style={{ color: 'rgba(255,255,255,0.7)' }}>{series.referenceRange} {series.unit}</span>
+                Rango de referencia: <span style={{ color: 'rgba(255,255,255,0.7)' }}>{refRange} {series.unit}</span>
               </p>
             )}
           </div>
@@ -191,7 +234,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
           </div>
         </div>
 
-        {/* Chart — zone bar for single point, line chart for multiple */}
+        {/* Chart */}
         <div style={{ position: 'relative', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', padding: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
           {points.length === 1 ? (() => {
             // ── EPIC ZONE BAR for single measurement ──────────────────────────
@@ -223,12 +266,23 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
 
             return (
               <div style={{ padding: '8px 0' }}>
-                {/* Big value display */}
+                {/* Clickable big value — triggers edit panel */}
                 <div style={{ textAlign: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontSize: '56px', fontWeight: 900, color: sc, fontFamily: 'monospace', lineHeight: 1, filter: `drop-shadow(0 0 24px ${sc}55)` }}>{spt.value}</span>
-                  <span style={{ fontSize: '18px', color: 'rgba(255,255,255,0.35)', marginLeft: '8px' }}>{series.unit}</span>
+                  <button
+                    onClick={() => handleEdit(0)}
+                    title="Clic para editar valor"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 12px', borderRadius: '12px', transition: 'background 0.2s', display: 'inline-block' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                  >
+                    <span style={{ fontSize: '56px', fontWeight: 900, color: sc, fontFamily: 'monospace', lineHeight: 1, filter: `drop-shadow(0 0 24px ${sc}55)` }}>{spt.value}</span>
+                    <span style={{ fontSize: '18px', color: 'rgba(255,255,255,0.35)', marginLeft: '8px' }}>{series.unit}</span>
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                      <Edit2 size={10} /> clic para editar
+                    </div>
+                  </button>
                   {spt.flag !== 'Normal' && (
-                    <div style={{ marginTop: '6px' }}>
+                    <div style={{ marginTop: '4px' }}>
                       <span style={{ fontSize: '13px', background: `${sc}22`, color: sc, padding: '4px 16px', borderRadius: '24px', fontWeight: 800, letterSpacing: '0.5px' }}>{spt.flag}</span>
                     </div>
                   )}
@@ -258,19 +312,12 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
                     </linearGradient>
                   </defs>
 
-                  {/* Track */}
                   <rect x={BL} y={bY} width={bW} height={bH} rx={bRad} fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-
-                  {/* Zones */}
                   {hLow && <rect x={BL} y={bY} width={rMinX - BL} height={bH} fill="url(#modal-zb-low)" clipPath="url(#modal-zb-clip)" />}
                   <rect x={nStart} y={bY} width={nEnd - nStart} height={bH} fill="url(#modal-zb-norm)" clipPath="url(#modal-zb-clip)" />
                   {hHigh && <rect x={rMaxX} y={bY} width={BR - rMaxX} height={bH} fill="url(#modal-zb-high)" clipPath="url(#modal-zb-clip)" />}
-
-                  {/* Dividers */}
                   {hLow  && <line x1={rMinX} y1={bY} x2={rMinX} y2={bY + bH} stroke="rgba(255,255,255,0.15)" strokeWidth="2" />}
                   {hHigh && <line x1={rMaxX} y1={bY} x2={rMaxX} y2={bY + bH} stroke="rgba(255,255,255,0.15)" strokeWidth="2" />}
-
-                  {/* Zone labels inside bar */}
                   {hLow && (rMinX - BL) > 80 && (
                     <text x={(BL + rMinX) / 2} y={bY + bH / 2 + 1} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="800" fill="rgba(59,130,246,0.85)" letterSpacing="1.5">BAJO</text>
                   )}
@@ -280,15 +327,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
                   {hHigh && (BR - rMaxX) > 80 && (
                     <text x={(rMaxX + BR) / 2} y={bY + bH / 2 + 1} textAnchor="middle" dominantBaseline="middle" fontSize="14" fontWeight="800" fill="rgba(239,68,68,0.85)" letterSpacing="1.5">ALTO</text>
                   )}
-
-                  {/* Ref labels above */}
                   {hLow && <text x={rMinX} y={bY - 10} textAnchor="middle" fontSize="12" fill="rgba(59,130,246,0.6)" fontWeight="700">{ref.min}</text>}
                   {hHigh && <text x={rMaxX} y={bY - 10} textAnchor="middle" fontSize="12" fill="rgba(239,68,68,0.6)" fontWeight="700">{ref.max}</text>}
-
-                  {/* Needle line */}
                   <line x1={nX} y1={bY - 38} x2={nX} y2={bY + bH + 12} stroke={sc} strokeWidth="2.5" strokeOpacity="0.45" />
-
-                  {/* Glowing needle circle */}
                   <circle cx={nX} cy={bY + bH / 2} r={20} fill={sc} filter="url(#modal-zb-glow)" stroke="#0f0f1a" strokeWidth="3.5" />
                   <text x={nX} y={bY + bH / 2} textAnchor="middle" dominantBaseline="middle" fontSize="11" fontWeight="900" fill="#fff" fontFamily="monospace">{spt.value}</text>
                 </svg>
@@ -296,7 +337,6 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
             );
           })() : (
           <svg width={W} height={H} style={{ overflow: 'visible', maxWidth: '100%' }}>
-
             <defs>
               <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={lc} stopOpacity="0.3" />
@@ -308,7 +348,6 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               </linearGradient>
             </defs>
 
-            {/* Y grid lines */}
             {Array.from({ length: yGridLines }).map((_, i) => {
               const v = minV + (range / (yGridLines - 1)) * i;
               const y = toY(v);
@@ -320,7 +359,6 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               );
             })}
 
-            {/* Reference band */}
             {(ref.min != null || ref.max != null) && (() => {
               const bandTop = toY(ref.max ?? maxV);
               const bandBot = toY(ref.min ?? minV);
@@ -336,11 +374,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               );
             })()}
 
-            {/* Area + line */}
             <polygon points={area} fill={`url(#${gradId})`} />
             {points.length > 1 && <polyline points={polyline} fill="none" stroke={lc} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />}
 
-            {/* Data points */}
             {points.map((pt, i) => (
               <g key={i} style={{ cursor: 'pointer' }}
                 onMouseEnter={() => setTooltip({ i, x: toX(i), y: toY(pt.value) })}
@@ -352,14 +388,12 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               </g>
             ))}
 
-            {/* X axis labels */}
             {points.map((pt, i) => (
               <text key={i} x={toX(i)} y={H - 6} textAnchor="middle" fontSize="9" fill="rgba(255,255,255,0.3)">
               {new Date(/^\d{4}-\d{2}-\d{2}$/.test(pt.date) ? pt.date + 'T12:00:00' : pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
               </text>
             ))}
 
-            {/* Hover tooltip */}
             {tooltip && (() => {
               const pt = points[tooltip.i];
               const strokeColor = flagColor(pt.flag, pt.isEdited);
@@ -400,7 +434,81 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
           <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'rgba(255,255,255,0.3)' }}>{points.length} mediciones</span>
         </div>
 
-        {/* Edit panel */}
+        {/* ── Configure limits panel ─────────────────────────────────────────── */}
+        <div style={{ marginTop: '16px' }}>
+          <button
+            onClick={() => { setShowRangeEdit(v => !v); setRangeStatus(null); }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', background: showRangeEdit ? 'rgba(212,175,55,0.12)' : 'rgba(255,255,255,0.04)', border: `1px solid ${showRangeEdit ? 'rgba(212,175,55,0.4)' : 'rgba(255,255,255,0.1)'}`, borderRadius: '10px', padding: '8px 16px', cursor: 'pointer', color: showRangeEdit ? 'var(--gold-primary)' : 'rgba(255,255,255,0.5)', fontSize: '12px', fontWeight: 600, transition: 'all 0.2s' }}
+          >
+            <Settings2 size={14} />
+            Configurar límites de referencia
+          </button>
+
+          {showRangeEdit && (
+            <div style={{ marginTop: '12px', padding: '20px', background: 'rgba(212,175,55,0.05)', border: '1px solid rgba(212,175,55,0.18)', borderRadius: '14px' }}>
+              <p style={{ margin: '0 0 14px', fontSize: '11px', color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                Límites de referencia — se guardan en todos los estudios de este marcador
+              </p>
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                {/* Min */}
+                <div>
+                  <label style={{ fontSize: '11px', color: 'rgba(59,130,246,0.8)', display: 'block', marginBottom: '4px', fontWeight: 600 }}>Límite inferior (Bajo)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <input
+                      type="text"
+                      value={refMinEdit}
+                      onChange={e => setRefMinEdit(e.target.value)}
+                      placeholder="sin límite"
+                      style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: '8px', padding: '8px 12px', color: '#fff', fontSize: '16px', fontFamily: 'monospace', fontWeight: 700, width: '120px', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>{series.unit}</span>
+                  </div>
+                </div>
+
+                {/* Max */}
+                <div>
+                  <label style={{ fontSize: '11px', color: 'rgba(239,68,68,0.8)', display: 'block', marginBottom: '4px', fontWeight: 600 }}>Límite superior (Alto)</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <input
+                      type="text"
+                      value={refMaxEdit}
+                      onChange={e => setRefMaxEdit(e.target.value)}
+                      placeholder="sin límite"
+                      style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', borderRadius: '8px', padding: '8px 12px', color: '#fff', fontSize: '16px', fontFamily: 'monospace', fontWeight: 700, width: '120px', outline: 'none' }}
+                    />
+                    <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>{series.unit}</span>
+                  </div>
+                </div>
+
+                {/* Preview */}
+                <div style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)', fontSize: '12px', color: 'rgba(255,255,255,0.5)' }}>
+                  <span style={{ fontSize: '10px', display: 'block', marginBottom: '2px', color: 'rgba(255,255,255,0.3)' }}>Vista previa</span>
+                  {refMinEdit || refMaxEdit
+                    ? `${refMinEdit || '—'} → ${refMaxEdit || '—'} ${series.unit}`
+                    : 'sin límites'}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: '8px', marginLeft: 'auto' }}>
+                  <button onClick={() => setShowRangeEdit(false)} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px' }}>
+                    Cancelar
+                  </button>
+                  <button onClick={handleSaveRange} disabled={savingRange} style={{ padding: '8px 20px', background: 'var(--gold-primary)', border: 'none', borderRadius: '8px', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 800 }}>
+                    {savingRange ? '...' : 'Guardar límites'}
+                  </button>
+                </div>
+              </div>
+
+              {rangeStatus && (
+                <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '8px', background: rangeStatus.ok ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${rangeStatus.ok ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`, color: rangeStatus.ok ? '#22c55e' : '#f87171', fontSize: '12px', fontWeight: 600 }}>
+                  {rangeStatus.msg}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Edit panel (for value editing) */}
         {editIdx !== null && (
           <div style={{ marginTop: '20px', padding: '20px', background: 'rgba(212,175,55,0.06)', border: '1px solid rgba(212,175,55,0.2)', borderRadius: '14px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', width: '100%' }}>
@@ -416,7 +524,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               </div>
               <div style={{ display: 'flex', gap: '6px' }}>
                 {(['Normal', 'Alto', 'Bajo'] as const).map(f => (
-                  <button key={f} onClick={() => setEditFlag(f)} style={{ padding: '6px 14px', borderRadius: '8px', border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'rgba(255,255,255,0.15)'}`, background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)') : 'transparent', color: editFlag === f ? (f === 'Normal' ? '#22c55e' : '#ef4444') : 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>{f}</button>
+                  <button key={f} onClick={() => setEditFlag(f)} style={{ padding: '6px 14px', borderRadius: '8px', border: `1px solid ${editFlag === f ? (f === 'Normal' ? '#22c55e' : f === 'Alto' ? '#ef4444' : '#3b82f6') : 'rgba(255,255,255,0.15)'}`, background: editFlag === f ? (f === 'Normal' ? 'rgba(34,197,94,0.15)' : f === 'Alto' ? 'rgba(239,68,68,0.15)' : 'rgba(59,130,246,0.15)') : 'transparent', color: editFlag === f ? (f === 'Normal' ? '#22c55e' : f === 'Alto' ? '#ef4444' : '#3b82f6') : 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>{f}</button>
                 ))}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -435,7 +543,7 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
               </div>
             </div>
 
-            {/* Document viewer button */}
+            {/* Document viewer */}
             {editIdx !== null && documents?.some(d => d.study_id === points[editIdx].studyId) && (() => {
               const pt = points[editIdx];
               const doc = documents?.find(d => d.study_id === pt.studyId);
@@ -446,28 +554,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
                     href={doc.public_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '8px 16px',
-                      borderRadius: '8px',
-                      background: 'rgba(212,175,55,0.12)',
-                      border: '1px solid rgba(212,175,55,0.3)',
-                      color: 'var(--gold-primary)',
-                      fontSize: '12px',
-                      fontWeight: 700,
-                      textDecoration: 'none',
-                      transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => {
-                      e.currentTarget.style.background = 'rgba(212,175,55,0.2)';
-                      e.currentTarget.style.borderColor = 'var(--gold-primary)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.background = 'rgba(212,175,55,0.12)';
-                      e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)';
-                    }}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 16px', borderRadius: '8px', background: 'rgba(212,175,55,0.12)', border: '1px solid rgba(212,175,55,0.3)', color: 'var(--gold-primary)', fontSize: '12px', fontWeight: 700, textDecoration: 'none', transition: 'all 0.2s' }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(212,175,55,0.2)'; e.currentTarget.style.borderColor = 'var(--gold-primary)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(212,175,55,0.12)'; e.currentTarget.style.borderColor = 'rgba(212,175,55,0.3)'; }}
                   >
                     <Eye size={14} /> Ver Documento Original
                   </a>
@@ -477,21 +566,9 @@ export default function ExpandedChartModal({ series, patientId, onClose, onValue
           </div>
         )}
 
-        {/* Save status banner — shows success or error after every save attempt */}
+        {/* Save status banner */}
         {saveStatus && (
-          <div style={{
-            marginTop: '12px',
-            padding: '12px 16px',
-            borderRadius: '10px',
-            background: saveStatus.ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-            border: `1px solid ${saveStatus.ok ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}`,
-            color: saveStatus.ok ? '#22c55e' : '#f87171',
-            fontSize: '13px',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}>
+          <div style={{ marginTop: '12px', padding: '12px 16px', borderRadius: '10px', background: saveStatus.ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', border: `1px solid ${saveStatus.ok ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)'}`, color: saveStatus.ok ? '#22c55e' : '#f87171', fontSize: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
             {saveStatus.msg}
           </div>
         )}

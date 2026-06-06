@@ -16,7 +16,7 @@ import Module2Editor from '@/components/Module2Editor';
 import ModuleContentRenderer from '@/components/ModuleContentRenderer';
 import dynamic from 'next/dynamic';
 const RichTextEditor = dynamic(() => import('@/components/RichTextEditor'), { ssr: false, loading: () => <div style={{ padding: '40px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '13px' }}>Cargando editor…</div> });
-import { generatePrintHTML, svgForSeries, buildSeriesForPrint, type AiNoteForPrint } from '@/lib/generatePrintHTML';
+import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/generatePrintHTML';
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
@@ -53,6 +53,7 @@ const MODULE_DEFS = [
   { num: 4, icon: '🧠', title: 'Diagnósticos Posibles y Correlaciones', desc: 'Diagnóstico diferencial, patrones multisistémicos y factores de riesgo.', color: '#f59e0b', isComparative: false },
   { num: 5, icon: '📌', title: 'Plan de Intervención Integral', desc: 'Tratamiento, suplementación, estilo de vida, estudios adicionales y seguimiento.', color: '#22c55e', isComparative: false },
   { num: 6, icon: '📊', title: 'Gráficas Comparativas', desc: 'Gráficas de evolución comparativas seleccionadas desde el perfil del paciente.', color: '#d4af37', isComparative: true },
+  { num: 7, icon: '🤖', title: 'Análisis del Asistente Clínico', desc: 'Anotaciones y análisis guardados desde la Consulta IA, editables antes del PDF.', color: '#8b5cf6', isComparative: false },
 ];
 
 // ─── Rich Markdown renderer ──────────────────────────────────────────────────
@@ -171,6 +172,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const [showResetModal, setShowResetModal] = useState(false);
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [aiNotes, setAiNotes] = useState<AiNote[]>([]);
+  const [showNotesManager, setShowNotesManager] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
 
   const handleResetReport = async () => {
     try {
@@ -185,12 +188,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     }
   };
 
-  // Load comparative groups from Supabase when patient ID is known
-  useEffect(() => {
-    if (!id) return;
-    getComparativeGroups(id).then(groups => setM6Groups(groups));
-    getAiNotes(id).then(notes => setAiNotes(notes));
-  }, [id]);
+  // Comparative groups loaded as part of loadAll below
 
   // Build a ChartSeries from allStudies for a given canonical marker name,
   // then apply any localStorage overrides so manually-edited values always show.
@@ -230,6 +228,19 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
 
   useEffect(() => { loadAll(); }, [id]);
 
+  // Auto-populate Module 7 content from aiNotes whenever notes change
+  useEffect(() => {
+    if (aiNotes.length > 0) {
+      const draft = buildModule7Draft();
+      // Only auto-populate if user hasn't manually typed something different
+      setEditContent(prev => {
+        if (!prev[7] || prev[7] === buildModule7Draft()) return { ...prev, [7]: draft };
+        return prev;
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiNotes]);
+
   const autoBuildCanonical = async () => {
     try {
       await fetch('/api/build-canonical', {
@@ -243,11 +254,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   };
 
   const loadAll = async () => {
-    const [pat, studies, interview, savedModules] = await Promise.all([
+    const [pat, studies, interview, savedModules, comparativeGroups, aiNotesData] = await Promise.all([
       getPatientById(id),
       getStudiesWithBiomarkers(id),
       getInterviewAnswers(id),
       getReportModules(id),
+      getComparativeGroups(id),
+      getAiNotes(id),
     ]);
     if (pat) setPatient(pat);
     // Keep all studies for longitudinal analysis
@@ -266,6 +279,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     const moduleMap: Record<number, ReportModule> = {};
     savedModules.forEach(m => { moduleMap[m.module_num] = m; });
     setModules(moduleMap);
+    setM6Groups(comparativeGroups);
+    setAiNotes(aiNotesData);
   };
 
   const approvedModules = useCallback((): Record<number, string> => {
@@ -275,6 +290,38 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     });
     return result;
   }, [modules]);
+
+  // Delete a single AI note and rebuild the draft
+  const deleteAiNoteById = async (noteId: string) => {
+    setDeletingNoteId(noteId);
+    try {
+      const res = await fetch('/api/patient/ai-notes', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId: id, noteId }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        alert('Error al eliminar: ' + (e.error ?? 'desconocido'));
+        return;
+      }
+      await loadAll(); // refresh aiNotes
+    } finally {
+      setDeletingNoteId(null);
+    }
+  };
+
+  const buildModule7Draft = useCallback((): string => {
+    if (aiNotes.length === 0) return '';
+    const header = '# Análisis del Asistente Clínico\n\n*Anotaciones guardadas desde la Consulta IA.*\n\n---\n\n';
+    const body = aiNotes.map(note => {
+      const parts: string[] = [];
+      if (note.question) parts.push(`## ${note.question}`);
+      parts.push(note.answer);
+      return parts.join('\n\n');
+    }).join('\n\n---\n\n');
+    return header + body;
+  }, [aiNotes]);
 
   const generateModule = async (num: number) => {
     if (!patient) return;
@@ -333,7 +380,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     if (!patient) return;
     const win = window.open('', '_blank', 'width=900,height=700');
     if (!win) { alert('Permite ventanas emergentes para generar el PDF.'); return; }
-    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies, biomarkers, aiNotes);
+    const m7Content = editContent[7] ?? (aiNotes.length > 0 ? buildModule7Draft() : '');
+    const html = generatePrintHTML(patient, modules, new Date(), m6Groups, allStudies, biomarkers, m7Content);
     win.document.open();
     win.document.write(html);
     win.document.close();
@@ -371,6 +419,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
           biomarkers,
           m6Markers: m6Groups.flatMap(g => g.markers),
           m6Groups: m6GroupsWithImages,
+          m7Content: editContent[7] ?? (aiNotes.length > 0 ? buildModule7Draft() : ''),
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -389,8 +438,8 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     }
   };
 
-  const approvedCount = Object.values(modules).filter(m => m.status === 'approved').length;
-  // Module 6 (Comparative Charts) is optional — allApproved only needs 1-5
+  const approvedCount = [1,2,3,4,5].filter(n => modules[n]?.status === 'approved').length;
+  // Modules 6 and 7 are optional — allApproved only needs 1–5
   const allApproved = [1,2,3,4,5].every(n => modules[n]?.status === 'approved');
 
   if (!patient) return (
@@ -494,7 +543,9 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
             const mod = modules[def.num];
             const isGenerating = generating[def.num];
             // Module 6 uses localStorage groups, not Supabase
-            const hasContent = def.num === 6 ? m6Groups.length > 0 : !!mod?.content;
+            const hasContent = def.num === 6 ? m6Groups.length > 0
+              : def.num === 7 ? true  // always expandable — user can write manually
+              : !!mod?.content;
             const isApproved = def.num === 6 ? m6Groups.length > 0 : mod?.status === 'approved';
             const isExpanded = expanded === def.num;
             const isEditing = editMode[def.num];
@@ -529,7 +580,51 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
 
                   {/* Actions */}
                   <div className="no-print" style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-                    {def.isComparative ? (
+                    {def.num === 7 ? (
+                      /* Module 7: AI Notes — load from IA instead of generate */
+                      <>
+                        {/* Always show a subtle refresh button so user can re-fetch notes */}
+                        <button
+                          onClick={async e => {
+                            e.stopPropagation();
+                            const fresh = await getAiNotes(id);
+                            setAiNotes(fresh);
+                          }}
+                          title="Actualizar anotaciones desde la base de datos"
+                          style={{ padding: '7px', borderRadius: '6px', border: '1px solid rgba(139,92,246,0.3)', background: 'transparent', color: '#a78bfa', cursor: 'pointer', display: 'flex' }}
+                        >
+                          <RefreshCw size={14} />
+                        </button>
+                        {aiNotes.length > 0 && !mod?.content && (
+                          <button
+                            onClick={async e => {
+                              e.stopPropagation();
+                              const draft = buildModule7Draft();
+                              await upsertReportModule(id, 7, 'Análisis del Asistente Clínico', draft, 'pending');
+                              await loadAll();
+                              setEditMode(prev => ({ ...prev, [7]: true }));
+                              setEditContent(prev => ({ ...prev, [7]: draft }));
+                              setExpanded(7);
+                            }}
+                            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: 'linear-gradient(135deg,#8b5cf6,#6d28d9)', color: '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: 600, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          >
+                            <Sparkles size={13} /> Cargar desde IA
+                          </button>
+                        )}
+                        {hasContent && mod?.content && !isApproved && (
+                          <button onClick={e => { e.stopPropagation(); approveModule(7); }}
+                            style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#22c55e', color: '#fff', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <CheckCircle2 size={13} /> Aprobar
+                          </button>
+                        )}
+                        {hasContent && (
+                          <button onClick={e => { e.stopPropagation(); setExpanded(isExpanded ? null : def.num); }}
+                            style={{ padding: '7px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </button>
+                        )}
+                      </>
+                    ) : def.isComparative ? (
                       /* Module 6: no AI generate — only expand chevron */
                       <>
                         {!hasContent && (
@@ -747,7 +842,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                             </p>
                                           </div>
                                         )}
-                                        <button
+                          <button
                                           onClick={() => {
                                             setEditingNoteId(group.id);
                                             setNoteInputs(prev => ({ ...prev, [group.id]: group.doctorNote ?? '' }));
@@ -766,41 +861,170 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                           </div>
                         );
                       })()
-                    ) : (
+                                    ) : (
                       <>
-                        {/* Edit toolbar */}
-                        <div className="no-print" style={{ padding: '10px 24px', background: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)' }}>
-                          <button onClick={() => {
-                            setEditMode(prev => ({ ...prev, [def.num]: !isEditing }));
-                            if (!isEditing) setEditContent(prev => ({ ...prev, [def.num]: mod.content }));
-                          }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: isEditing ? 'rgba(212,175,55,0.1)' : 'transparent', color: isEditing ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
-                            {isEditing ? '👁 Ver preview' : '✏️ Editar'}
-                          </button>
-                          {isEditing && (
-                            <button onClick={() => saveEdit(def.num)} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {saving[def.num] ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />} Guardar
-                            </button>
-                          )}
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-                            Última edición: {new Date(mod.updated_at).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        </div>
-                        {(() => {
-                          const isM2Json = def.num === 2 && mod.content.includes('"systems"');
-                          const viewContent = mod.content;
-                          const editVal = editContent[def.num] ?? mod.content;
-                          if (isEditing && isM2Json) return (<div style={{ background: '#0c0c14' }}><Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} /></div>);
-                          if (isEditing) return (
-                            <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden', margin: '0' }}>
-                              <RichTextEditor
-                                content={editVal}
-                                onChange={newMd => setEditContent(prev => ({ ...prev, [def.num]: newMd }))}
-                              />
+                        {/* Module 7 body: sourced from aiNotes, never from report_modules */}
+                        {def.num === 7 ? (
+                          <div style={{ padding: '0' }}>
+                            {aiNotes.length > 0 || (editContent[7] ?? '') !== '' ? (
+                              <>
+                                {/* Edit toolbar */}
+                                <div className="no-print" style={{ padding: '10px 24px', background: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)' }}>
+                                  <button onClick={() => {
+                                    setEditMode(prev => ({ ...prev, [7]: !editMode[7] }));
+                                    if (!editMode[7]) setEditContent(prev => ({ ...prev, [7]: prev[7] ?? buildModule7Draft() }));
+                                  }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: editMode[7] ? 'rgba(212,175,55,0.1)' : 'transparent', color: editMode[7] ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                                    {editMode[7] ? '👁 Ver preview' : '✏️ Editar'}
+                                  </button>
+                                  {editMode[7] && (
+                                    <button onClick={async () => {
+                                      // Save the edited content back as a single consolidated note
+                                      const content = editContent[7] ?? '';
+                                      // Persist edited draft via API as a special note
+                                      const res = await fetch('/api/patient/ai-notes', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ patientId: id, question: '__m7_draft__', answer: content }),
+                                      });
+                                      if (!res.ok) {
+                                        const e = await res.json().catch(() => ({}));
+                                        alert('Error al guardar: ' + (e.error ?? 'desconocido'));
+                                      }
+                                    }} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                      <Save size={12} /> Guardar
+                                    </button>
+                                  )}
+                                  {aiNotes.length > 0 && (
+                                    <button onClick={() => {
+                                      setEditContent(prev => ({ ...prev, [7]: buildModule7Draft() }));
+                                    }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.08)', color: '#a78bfa', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                      <RefreshCw size={11} /> Restaurar desde IA
+                                    </button>
+                                  )}
+                                </div>
+                                {/* Notes manager: list of individual deletable notes */}
+                                {aiNotes.filter(n => n.question !== '__m7_draft__').length > 0 && (
+                                  <div className="no-print" style={{ borderBottom: '1px solid var(--border-subtle)', background: 'rgba(139,92,246,0.03)' }}>
+                                    <button
+                                      onClick={() => setShowNotesManager(p => !p)}
+                                      style={{ width: '100%', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'var(--font-main)' }}
+                                    >
+                                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <span>🗒</span>
+                                        <strong style={{ color: '#a78bfa' }}>{aiNotes.filter(n => n.question !== '__m7_draft__').length}</strong> anotación(es) guardadas — clic para gestionar
+                                      </span>
+                                      <span style={{ fontSize: '10px', opacity: 0.6 }}>{showNotesManager ? '▲ Ocultar' : '▼ Ver y borrar'}</span>
+                                    </button>
+                                    {showNotesManager && (
+                                      <div style={{ padding: '0 24px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        {aiNotes.filter(n => n.question !== '__m7_draft__').map((note, idx) => (
+                                          <div key={note.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(139,92,246,0.2)', background: 'rgba(139,92,246,0.05)' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                              <p style={{ margin: '0 0 3px', fontSize: '11px', fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Nota {idx + 1}</p>
+                                              {note.question && note.question !== '__m7_draft__' && (
+                                                <p style={{ margin: '0 0 3px', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.question.slice(0, 80)}{note.question.length > 80 ? '…' : ''}</p>
+                                              )}
+                                              <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{note.answer.slice(0, 100)}…</p>
+                                            </div>
+                                            <button
+                                              onClick={() => {
+                                                if (!confirm('¿Eliminar esta anotación del reporte?')) return;
+                                                deleteAiNoteById(note.id);
+                                              }}
+                                              disabled={deletingNoteId === note.id}
+                                              title="Eliminar anotación"
+                                              style={{ flexShrink: 0, padding: '6px 8px', borderRadius: '6px', border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.06)', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', opacity: deletingNoteId === note.id ? 0.5 : 1 }}
+                                            >
+                                              <Trash2 size={13} />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Content area */}
+                                {editMode[7] ? (
+                                  <div style={{ padding: '24px' }}>
+                                    <RichTextEditor
+                                      content={editContent[7] ?? buildModule7Draft()}
+                                      onChange={val => setEditContent(prev => ({ ...prev, [7]: val }))}
+                                    />
+                                  </div>
+                                ) : (
+                                  <ModuleContentRenderer content={editContent[7] ?? buildModule7Draft()} />
+                                )}
+                              </>
+                            ) : (
+                              /* Empty: no notes yet, offer manual drafting */
+                              <div style={{ padding: '40px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', textAlign: 'center' }}>
+                                <div style={{ width: '56px', height: '56px', borderRadius: '14px', background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px' }}>🤖</div>
+                                <p style={{ margin: 0, fontSize: '14px', color: 'var(--text-muted)', maxWidth: '360px', lineHeight: 1.6 }}>
+                                  Aún no hay anotaciones de la Consulta IA. Puedes redactar este módulo manualmente.
+                                </p>
+                                <button
+                                  onClick={() => {
+                                    setEditMode(prev => ({ ...prev, [7]: true }));
+                                    setEditContent(prev => ({ ...prev, [7]: '' }));
+                                  }}
+                                  style={{ padding: '10px 24px', borderRadius: '8px', border: '1px solid rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.2)', color: '#a78bfa', cursor: 'pointer', fontFamily: 'var(--font-main)', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}
+                                >
+                                  ✏️ Redactar manualmente
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            {/* Edit toolbar */}
+                            <div className="no-print" style={{ padding: '10px 24px', background: 'var(--bg-main)', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-subtle)' }}>
+                              <button onClick={() => {
+                                setEditMode(prev => ({ ...prev, [def.num]: !isEditing }));
+                                if (!isEditing) setEditContent(prev => ({ ...prev, [def.num]: mod!.content }));
+                              }} style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid var(--border-subtle)', background: isEditing ? 'rgba(212,175,55,0.1)' : 'transparent', color: isEditing ? 'var(--gold-primary)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)' }}>
+                                {isEditing ? '👁 Ver preview' : '✏️ Editar'}
+                              </button>
+                              {isEditing && (
+                                <button onClick={() => saveEdit(def.num)} style={{ padding: '5px 12px', borderRadius: '6px', border: 'none', background: 'var(--gold-primary)', color: '#000', cursor: 'pointer', fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  {saving[def.num] ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />} Guardar
+                                </button>
+                              )}
+                              {/* Module 7: reload from IA */}
+                              {def.num === 7 && aiNotes.length > 0 && (
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm('¿Reemplazar el contenido actual con las anotaciones IA? Los cambios manuales no guardados se perderán.')) return;
+                                    const draft = buildModule7Draft();
+                                    setEditContent(prev => ({ ...prev, [7]: draft }));
+                                    setEditMode(prev => ({ ...prev, [7]: true }));
+                                  }}
+                                  style={{ padding: '5px 12px', borderRadius: '6px', border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.08)', color: '#a78bfa', cursor: 'pointer', fontSize: '12px', fontFamily: 'var(--font-main)', display: 'flex', alignItems: 'center', gap: '5px' }}
+                                >
+                                  <RefreshCw size={11} /> Recargar desde IA
+                                </button>
+                              )}
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                                Última edición: {new Date(mod!.updated_at).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                              </span>
                             </div>
-                          );
-                          if (isM2Json) return (<div style={{ background: '#0a0a12' }}><Module2Renderer content={viewContent} /></div>);
-                          return (<div style={{ padding: '24px 32px' }}><ModuleContentRenderer content={viewContent} /></div>);
-                        })()}
+                            {(() => {
+                              const isM2Json = def.num === 2 && mod!.content.includes('"systems"');
+                              const viewContent = mod!.content;
+                              const editVal = editContent[def.num] ?? mod!.content;
+                              if (isEditing && isM2Json) return (<div style={{ background: '#0c0c14' }}><Module2Editor content={editVal} onChange={newJson => setEditContent(prev => ({ ...prev, [def.num]: newJson }))} /></div>);
+                              if (isEditing) return (
+                                <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden', margin: '0' }}>
+                                  <RichTextEditor
+                                    content={editVal}
+                                    onChange={newMd => setEditContent(prev => ({ ...prev, [def.num]: newMd }))}
+                                  />
+                                </div>
+                              );
+                              if (isM2Json) return (<div style={{ background: '#0a0a12' }}><Module2Renderer content={viewContent} /></div>);
+                              return (<div style={{ padding: '24px 32px' }}><ModuleContentRenderer content={viewContent} /></div>);
+                            })()}
+                          </>
+                        )}
                       </>
                     )}
                   </div>
@@ -810,58 +1034,7 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
             );
           })}
 
-          {/* ── Anotaciones de IA ── */}
-          {aiNotes.length > 0 && (
-            <div style={{ marginBottom: '16px', borderRadius: '14px', border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.03)', overflow: 'hidden' }}>
-              {/* Header */}
-              <div style={{ padding: '20px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(139,92,246,0.15)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '22px', flexShrink: 0 }}>🤖</div>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '3px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: '#a78bfa', background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)', padding: '2px 8px', borderRadius: '99px' }}>ANOTACIONES IA</span>
-                      <span style={{ fontSize: '11px', color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} /> Guardadas</span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>Análisis del Asistente Clínico</p>
-                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{aiNotes.length} anotación{aiNotes.length !== 1 ? 'es' : ''} guardada{aiNotes.length !== 1 ? 's' : ''} desde la Consulta IA</p>
-                  </div>
-                </div>
-              </div>
 
-              {/* Notes list */}
-              <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                {aiNotes.map((note, ni) => (
-                  <div key={note.id} style={{ borderRadius: '12px', border: '1px solid rgba(139,92,246,0.15)', background: 'rgba(255,255,255,0.015)', overflow: 'hidden' }}>
-                    {/* Question */}
-                    <div style={{ padding: '10px 16px', background: 'rgba(139,92,246,0.06)', borderBottom: '1px solid rgba(139,92,246,0.1)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', flex: 1, minWidth: 0 }}>
-                        <span style={{ fontSize: '13px', color: '#a78bfa', flexShrink: 0, marginTop: '1px' }}>👤</span>
-                        <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5, fontStyle: 'italic' }}>{note.question || 'Consulta clínica'}</p>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                          {new Date(note.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
-                        </span>
-                        <button
-                          onClick={async () => {
-                            await deleteAiNote(id, note.id);
-                            setAiNotes(prev => prev.filter(n => n.id !== note.id));
-                          }}
-                          style={{ padding: '2px 6px', borderRadius: '5px', background: 'transparent', border: '1px solid rgba(239,68,68,0.2)', color: 'rgba(239,68,68,0.5)', cursor: 'pointer', fontSize: '10px', lineHeight: 1 }}
-                          title="Eliminar anotación"
-                        >×</button>
-                      </div>
-                    </div>
-                    {/* Answer */}
-                    <div
-                      style={{ padding: '14px 20px', fontSize: '14px', lineHeight: 1.8, color: 'var(--text-secondary)' }}
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(note.answer) }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Final CTA */}
           {allApproved && (

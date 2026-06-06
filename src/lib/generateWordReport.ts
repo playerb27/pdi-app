@@ -15,7 +15,7 @@ const C = {
 };
 
 const MODULE_COLORS: Record<number, string> = {
-  1: C.blue, 2: C.purple, 3: C.teal, 4: C.amber, 5: C.green, 6: 'B8922A',
+  1: C.blue, 2: C.purple, 3: C.teal, 4: C.amber, 5: C.green, 6: 'B8922A', 7: '6D28D9',
 };
 const MODULE_TITLES: Record<number, string> = {
   1: 'Perfil Integral del Paciente',
@@ -24,9 +24,10 @@ const MODULE_TITLES: Record<number, string> = {
   4: 'Diagnósticos Posibles y Correlaciones',
   5: 'Plan de Intervención Integral',
   6: 'Gráficas Comparativas',
+  7: 'Análisis del Asistente Clínico',
 };
 const MODULE_ICONS: Record<number, string> = {
-  1: 'MÓDULO 1', 2: 'MÓDULO 2', 3: 'MÓDULO 3', 4: 'MÓDULO 4', 5: 'MÓDULO 5', 6: 'MÓDULO 6',
+  1: 'MÓDULO 1', 2: 'MÓDULO 2', 3: 'MÓDULO 3', 4: 'MÓDULO 4', 5: 'MÓDULO 5', 6: 'MÓDULO 6', 7: 'MÓDULO 7',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -590,6 +591,7 @@ export async function generateWordReport(
   m6Markers: string[] = [],
   m6Groups: Array<{ id: string; markers: string[]; chartImages?: { marker: string; pngBase64: string }[] }> = [],
   latestBiomarkers: any[] = [],
+  m7Content: string = '',
 ): Promise<Buffer> {
   const dateStr = new Date().toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
   const approvedNums = [1, 2, 3, 4, 5].filter(n => modules[n]?.status === 'approved');
@@ -785,6 +787,14 @@ export async function generateWordReport(
       borders: colorBorder('E2E8F0', 4),
       rows: dataRows,
     }));
+  }
+
+  // ── Module 7: AI Notes (sourced from comparative_groups sentinel) ───────────
+  if (m7Content.trim()) {
+    children.push(new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } }));
+    children.push(buildModuleHeader(7));
+    children.push(spacer(2));
+    children.push(...mdToParagraphs(m7Content));
   }
 
   // ── Evolution charts section (all studies, after all modules) ─────────────

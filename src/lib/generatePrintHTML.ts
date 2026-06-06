@@ -11,7 +11,6 @@ function markedParse(md: string): string {
 interface ModuleDef { num: number; icon: string; title: string; color: string; }
 interface ReportModule { module_num: number; content: string; status: string; title: string; }
 export interface ComparativeGroupForPrint { id: string; markers: string[]; }
-export interface AiNoteForPrint { id: string; question: string; answer: string; createdAt: string; }
 
 const MODULE_DEFS: ModuleDef[] = [
   { num: 1, icon: '👤', title: 'Perfil Integral del Paciente', color: '#1e40af' },
@@ -19,6 +18,7 @@ const MODULE_DEFS: ModuleDef[] = [
   { num: 3, icon: '🩺', title: 'Evaluación Clínica Sistémica', color: '#0e7490' },
   { num: 4, icon: '🧠', title: 'Diagnósticos Posibles y Correlaciones', color: '#b45309' },
   { num: 5, icon: '📌', title: 'Plan de Intervención Integral', color: '#15803d' },
+  { num: 7, icon: '🤖', title: 'Análisis del Asistente Clínico', color: '#6d28d9' },
 ];
 
 // ─── Inline SVG chart builder (mirrors FullWidthChart logic) ─────────────────
@@ -33,9 +33,12 @@ function parseRef(ref?: string): { min: number | null; max: number | null } {
   return { min: null, max: null };
 }
 
-export function svgForSeries(s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] }): string {
-  const W = 700, H = 220;
-  const PAD = { top: 28, right: 48, bottom: 44, left: 56 };
+export function svgForSeries(
+  s: { name: string; unit: string; referenceRange?: string; points: { date: string; value: number; flag: string }[] },
+  H = 160,
+): string {
+  const W = 700;
+  const PAD = { top: 24, right: 48, bottom: 36, left: 56 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
   const ref = parseRef(s.referenceRange);
@@ -63,23 +66,23 @@ export function svgForSeries(s: { name: string; unit: string; referenceRange?: s
   }
 
   let yGrid = '';
-  [0, 0.33, 0.66, 1].forEach(t => {
+  [0, 0.5, 1].forEach(t => {
     const v = minV + range * t, y = toY(v);
     yGrid += `<line x1="${PAD.left}" y1="${y.toFixed(1)}" x2="${PAD.left+innerW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
-    yGrid += `<text x="${PAD.left-6}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="rgba(255,255,255,0.35)">${v.toFixed(1)}</text>`;
+    yGrid += `<text x="${PAD.left-6}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="9" fill="rgba(255,255,255,0.35)">${v.toFixed(1)}</text>`;
   });
 
   const dots = s.points.map((pt, i) => {
     const fc = pt.flag === 'Alto' ? '#ef4444' : pt.flag === 'Bajo' ? '#3b82f6' : '#22c55e';
-    return `<circle cx="${toX(i).toFixed(1)}" cy="${toY(pt.value).toFixed(1)}" r="6" fill="${fc}" stroke="#0a0a15" stroke-width="2"/>`;
+    return `<circle cx="${toX(i).toFixed(1)}" cy="${toY(pt.value).toFixed(1)}" r="5" fill="${fc}" stroke="#0a0a15" stroke-width="1.5"/>`;
   }).join('');
 
   const xlabels = s.points.map((pt, i) => {
     const d = new Date(pt.date).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
-    return `<text x="${toX(i).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.3)">${d}</text>`;
+    return `<text x="${toX(i).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)">${d}</text>`;
   }).join('');
 
-  return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;background:#0f0f1a;border-radius:10px">
+  return `<svg width="100%" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;background:#0f0f1a;border-radius:8px">
     <defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${lc}" stop-opacity="0.35"/><stop offset="100%" stop-color="${lc}" stop-opacity="0.03"/></linearGradient></defs>
     ${yGrid}${refBand}
     <polygon points="${area}" fill="url(#${gradId})"/>
@@ -345,7 +348,7 @@ export function generatePrintHTML(
   m6Groups: ComparativeGroupForPrint[] = [],
   allStudies: any[] = [],
   latestBiomarkers: any[] = [],
-  aiNotes: AiNoteForPrint[] = [],
+  m7Content: string = '',
 ): string {
   const patientAge = (() => {
     if (!patient.birth_date) return null;
@@ -376,6 +379,16 @@ export function generatePrintHTML(
       <div class="module-body">${bodyHtml}</div>
     </div>`;
   }).join('\n');
+
+  // ── Module 7: AI Notes (stored outside report_modules) ───────────────────────
+  const m7Section = m7Content.trim() ? `
+    <div class="module-section" id="module-7">
+      <div class="module-header" style="border-color:#6d28d9">
+        <span class="module-num" style="background:#6d28d9">MÓDULO 7</span>
+        <h2 class="module-title">🤖 Análisis del Asistente Clínico</h2>
+      </div>
+      <div class="module-body">${markedParse(m7Content)}</div>
+    </div>` : '';
 
   // ── Tabla Maestra de Biomarcadores ──────────────────────────────────────────
   let tablaSection = '';
@@ -482,76 +495,47 @@ export function generatePrintHTML(
         const lastVal = s.points[s.points.length - 1];
         const lc = lastVal?.flag === 'Alto' ? '#ef4444' : lastVal?.flag === 'Bajo' ? '#3b82f6' : '#22c55e';
         return `
-        <div style="margin-bottom:16px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.08)">
-          <div style="background:#0f0f1a;padding:12px 16px 6px">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-              <strong style="color:${lc};font-size:14px">${s.name}</strong>
-              <span style="color:${lc};font-size:22px;font-weight:900;font-family:monospace">${lastVal?.value ?? '—'} <span style="font-size:11px;font-weight:400;color:rgba(255,255,255,0.4)">${s.unit}</span></span>
-            </div>
-            ${s.referenceRange ? `<div style="font-size:10px;color:rgba(255,255,255,0.35);margin-bottom:6px">Ref: ${s.referenceRange} ${s.unit}</div>` : ''}
+        <div style="margin-bottom:12px;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;page-break-inside:avoid">
+          <div style="background:#fff;padding:10px 14px 6px;display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+            <strong style="color:${lc};font-size:13px">${s.name}</strong>
+            <span style="color:${lc};font-size:20px;font-weight:900;font-family:monospace;white-space:nowrap">${lastVal?.value ?? '—'} <span style="font-size:10px;font-weight:400;color:#9ca3af">${s.unit}</span></span>
           </div>
+          ${s.referenceRange ? `<div style="padding:0 14px 6px;font-size:9.5px;color:#9ca3af;background:#fff">Referencia: ${s.referenceRange} ${s.unit}</div>` : ''}
           ${svgForSeries(s)}
         </div>`;
       }).join('');
 
-      // Doctor note callout — printed on white background below the dark chart area
+      // Doctor note callout
       const noteHtml = (group as any).doctorNote ? `
-        <div style="padding:14px 16px 18px;background:#fff;border-top:1px solid rgba(212,175,55,0.2)">
-          <div style="padding:13px 16px;border-left:4px solid #b8922a;background:#fffbeb;border-radius:0 8px 8px 0">
-            <p style="margin:0 0 5px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#92400e;display:flex;align-items:center;gap:5px">
-              💬 Nota del médico
-            </p>
-            <p style="margin:0;font-size:12.5px;color:#78350f;line-height:1.75;font-style:italic">${(group as any).doctorNote}</p>
+        <div style="padding:12px 14px 14px;background:#fff;border-top:1px solid #f0ead8">
+          <div style="padding:10px 14px;border-left:4px solid #b8922a;background:#fffbeb;border-radius:0 8px 8px 0">
+            <p style="margin:0 0 4px;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#92400e">💬 Nota del médico</p>
+            <p style="margin:0;font-size:12px;color:#78350f;line-height:1.7;font-style:italic">${(group as any).doctorNote}</p>
           </div>
         </div>` : '';
 
       return `
-      <div style="margin-bottom:24px;border:1px solid rgba(212,175,55,0.2);border-radius:14px;overflow:hidden;page-break-inside:avoid">
-        <div style="background:rgba(212,175,55,0.06);padding:10px 16px;border-bottom:1px solid rgba(212,175,55,0.15)">
-          <strong style="color:#d4af37;font-size:12px">📊 Comparativa ${gi + 1}: ${group.markers.join(' · ')}</strong>
+      <div style="margin-bottom:20px;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;page-break-inside:avoid">
+        <div style="background:#fffbeb;padding:8px 14px;border-bottom:1px solid #f0e8c8">
+          <strong style="color:#92400e;font-size:11px">📊 Comparativa ${gi + 1}: ${group.markers.join(' · ')}</strong>
         </div>
-        <div style="padding:12px 16px;background:#0a0a15">${seriesHtml}</div>
+        <div style="padding:10px 12px;background:#fff">${seriesHtml}</div>
         ${noteHtml}
       </div>`;
     }).join('');
 
     m6Section = `
-    <div class="module-section" id="module-6" style="background:#0a0a15;color:white">
+    <div class="module-section" id="module-6">
       <div class="module-header" style="border-color:#d4af37">
         <span class="module-num" style="background:#b8922a">MÓDULO 6</span>
-        <h2 class="module-title" style="color:#f0ede6">📊 Gráficas Comparativas</h2>
+        <h2 class="module-title">📊 Gráficas Comparativas</h2>
       </div>
       <div class="module-body">${groupsHtml}</div>
     </div>`;
   }
 
-  // ── AI Notes Section ──────────────────────────────────────────────────────────
-  let aiNotesSection = '';
-  if (aiNotes.length > 0) {
-    const noteCards = aiNotes.map(note => `
-      <div style="margin-bottom:16px;border:1px solid #e8e0ff;border-radius:10px;overflow:hidden;page-break-inside:avoid">
-        <div style="padding:10px 16px;background:#f5f3ff;border-bottom:1px solid #e8e0ff;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-          <div style="display:flex;align-items:flex-start;gap:8px">
-            <span style="font-size:14px;flex-shrink:0">👤</span>
-            <p style="margin:0;font-size:12px;color:#5b21b6;line-height:1.5;font-style:italic">${note.question || 'Consulta clínica'}</p>
-          </div>
-          <span style="font-size:9px;color:#9ca3af;white-space:nowrap;flex-shrink:0">${new Date(note.createdAt).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-        </div>
-        <div style="padding:14px 18px;font-size:12px;line-height:1.8;color:#374151">${markedParse(note.answer)}</div>
-      </div>`);
-
-    aiNotesSection = `
-    <div class="module-section" id="ai-notes" style="page-break-before:always">
-      <div class="module-header" style="border-color:#7c3aed">
-        <span class="module-num" style="background:#6d28d9">IA</span>
-        <h2 class="module-title">🤖 Análisis del Asistente Clínico</h2>
-      </div>
-      <div class="module-body">
-        <p style="margin:0 0 20px;font-size:12px;color:#6b7280;font-style:italic">Las siguientes anotaciones fueron guardadas desde la Consulta IA y forman parte del análisis clínico de este reporte.</p>
-        ${noteCards.join('')}
-      </div>
-    </div>`;
-  }
+  // Module 7 (AI Notes) renders automatically via the moduleSections loop above
+  // if modules[7] is approved — no separate section needed.
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -647,15 +631,23 @@ export function generatePrintHTML(
 
     /* ── Page break control — prevents sections from splitting mid-content ── */
 
-    /* Every callout block, table, and list item stays intact across pages */
-    .module-body > div,
-    .module-body > blockquote,
-    .module-body > ul,
-    .module-body > ol,
+    /* Only truly atomic elements should avoid breaking:
+       - blockquotes (short callout boxes)
+       - tables and rows
+       - individual m2 system/hero cards
+       NOTE: Do NOT apply to .module-body > div or lists — those callout groups
+       can be long and would push large blank spaces to pages if kept together. */
+    .module-body blockquote,
     .module-body table,
     .module-body tr,
     .m2-system,
     .m2-hero-card {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    /* Individual labeled callout divs (single-item, short) stay intact */
+    .module-body > div[style*="display:flex"] {
       page-break-inside: avoid;
       break-inside: avoid;
     }
@@ -671,8 +663,8 @@ export function generatePrintHTML(
     /* Prevent lone lines at top/bottom of pages */
     .module-body p,
     .module-body li {
-      orphans: 3;
-      widows: 3;
+      orphans: 2;
+      widows: 2;
     }
 
     /* ── Print overrides ── */
@@ -714,7 +706,7 @@ export function generatePrintHTML(
   ${moduleSections}
   ${tablaSection}
   ${m6Section}
-  ${aiNotesSection}
+  ${m7Section}
 
 </body>
 </html>`;

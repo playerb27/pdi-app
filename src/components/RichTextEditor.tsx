@@ -247,6 +247,9 @@ export default function RichTextEditor({ content, onChange, pageHeightPx = 1122 
       attributes: {
         class: 'pdi-rich-editor',
         spellcheck: 'true',
+        lang: 'es',
+        autocorrect: 'on',
+        autocapitalize: 'sentences',
       },
     },
   });

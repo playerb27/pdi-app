@@ -192,16 +192,13 @@ export async function deleteStudy(studyId: string): Promise<boolean> {
 
 export async function updateBiomarker(
   biomarkerId: string,
-  updates: { value: string; flag: string }
+  updates: { value?: string; flag?: string; reference_range?: string }
 ): Promise<boolean> {
   try {
     const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        value: updates.value,
-        flag: updates.flag,
-      }),
+      body: JSON.stringify(updates),
     });
 
     if (!res.ok) {
@@ -216,6 +213,19 @@ export async function updateBiomarker(
     console.error('[updateBiomarker] Network error:', err);
     return false;
   }
+}
+
+/** Update reference_range on ALL biomarker rows in the given list (for a whole series). */
+export async function updateBiomarkerRange(
+  biomarkerIds: string[],
+  referenceRange: string
+): Promise<boolean> {
+  const results = await Promise.all(
+    biomarkerIds.map(id =>
+      updateBiomarker(id, { reference_range: referenceRange })
+    )
+  );
+  return results.every(ok => ok);
 }
 
 export async function deleteBiomarker(biomarkerId: string): Promise<boolean> {
@@ -356,7 +366,8 @@ export interface ComparativeGroup {
 
 export async function getComparativeGroups(patientId: string): Promise<ComparativeGroup[]> {
   const patient = await getPatientById(patientId);
-  return patient?.comparative_groups ?? [];
+  // Filter out the AI notes sentinel (stored here to avoid schema changes)
+  return (patient?.comparative_groups ?? []).filter((g: any) => g.id !== '__ai_notes__');
 }
 
 export async function saveComparativeGroup(patientId: string, markers: string[], doctorNote?: string): Promise<void> {
@@ -409,32 +420,68 @@ export async function getComparativeMarkers(patientId: string): Promise<string[]
 export const clearComparativeMarkers = clearComparativeGroups;
 
 // ─── AI Notes (chat annotations saved to report) ──────────────────────────────
+//
+// CRITICAL: Do NOT use the browser Supabase client (anon key) for these writes.
+// RLS policies silently block UPDATE on the patients table for anon users,
+// returning no error but making no change — same issue as biomarker edits.
+// All reads/writes go through /api/patient/ai-notes (service_role key).
 
 export async function getAiNotes(patientId: string): Promise<AiNote[]> {
-  const patient = await getPatientById(patientId);
-  return patient?.ai_notes ?? [];
+  try {
+    const res = await fetch(`/api/patient/ai-notes?patientId=${patientId}`, {
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[getAiNotes] Server error:', err.error);
+      return [];
+    }
+    const data = await res.json();
+    return data.notes ?? [];
+  } catch (err) {
+    console.error('[getAiNotes] Network error:', err);
+    return [];
+  }
 }
 
-export async function saveAiNote(patientId: string, question: string, answer: string): Promise<void> {
-  const patient = await getPatientById(patientId);
-  if (!patient) return;
-  const existing: AiNote[] = patient.ai_notes ?? [];
-  const newNote: AiNote = {
-    id: crypto.randomUUID(),
-    question,
-    answer,
-    createdAt: new Date().toISOString(),
-  };
-  await updatePatient(patientId, { ai_notes: [...existing, newNote] });
+export async function saveAiNote(patientId: string, question: string, answer: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/patient/ai-notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientId, question, answer }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error('[saveAiNote] Server error:', data.error);
+      return { success: false, error: data.error ?? 'Error desconocido del servidor' };
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error('[saveAiNote] Network error:', err);
+    return { success: false, error: err.message ?? 'Error de red' };
+  }
 }
 
 export async function deleteAiNote(patientId: string, noteId: string): Promise<void> {
-  const patient = await getPatientById(patientId);
-  if (!patient) return;
-  const existing: AiNote[] = patient.ai_notes ?? [];
-  await updatePatient(patientId, { ai_notes: existing.filter(n => n.id !== noteId) });
+  try {
+    const res = await fetch('/api/patient/ai-notes', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patientId, noteId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      console.error('[deleteAiNote] Server error:', err.error);
+    }
+  } catch (err) {
+    console.error('[deleteAiNote] Network error:', err);
+  }
 }
 
 export async function clearAiNotes(patientId: string): Promise<void> {
-  await updatePatient(patientId, { ai_notes: [] });
+  // Delete each note individually via the API
+  const notes = await getAiNotes(patientId);
+  await Promise.all(notes.map(n => deleteAiNote(patientId, n.id)));
 }
+

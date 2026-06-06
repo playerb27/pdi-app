@@ -20,10 +20,14 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const { value, flag } = body;
+    const { value, flag, reference_range } = body;
 
-    if (value === undefined || flag === undefined) {
-      return NextResponse.json({ error: 'Faltan campos: value y flag son requeridos' }, { status: 400 });
+    // reference_range is optional — value+flag OR just reference_range can be sent
+    const updatingValue = value !== undefined && flag !== undefined;
+    const updatingRange = reference_range !== undefined;
+
+    if (!updatingValue && !updatingRange) {
+      return NextResponse.json({ error: 'Se requiere al menos value+flag o reference_range' }, { status: 400 });
     }
 
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -36,21 +40,23 @@ export async function PATCH(
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // MEDICAL SAFETY: original_value is always wiped to null on every edit.
-    // The manually-corrected value IS the clinical truth — no old AI value should
-    // persist anywhere in the database after a human correction.
-    const payload: Record<string, any> = {
-      value: String(value),
-      flag: String(flag),
-      is_edited: true,
-      original_value: null,
-    };
+    // MEDICAL SAFETY: original_value is always wiped to null on every value edit.
+    const payload: Record<string, any> = {};
+    if (updatingValue) {
+      payload.value = String(value);
+      payload.flag = String(flag);
+      payload.is_edited = true;
+      payload.original_value = null;
+    }
+    if (updatingRange) {
+      payload.reference_range = reference_range;
+    }
 
     const { data: updated, error } = await sb
       .from('biomarkers')
       .update(payload)
       .eq('id', biomarkerId)
-      .select('id, value, flag, is_edited, original_value')
+      .select('id, value, flag, is_edited, original_value, reference_range')
       .single();
 
     if (error) {
@@ -65,8 +71,8 @@ export async function PATCH(
       );
     }
 
-    // Verify the value actually changed in DB
-    if (updated.value !== String(value)) {
+    // Verify the value actually changed in DB (only when updating a clinical value)
+    if (updatingValue && updated.value !== String(value)) {
       console.error('[PATCH /api/biomarkers] Value mismatch after update:', {
         expected: value,
         actual: updated.value,
