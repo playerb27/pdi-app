@@ -8,6 +8,14 @@ import EvolutionCharts from '@/components/EvolutionCharts';
 import ComparativeModal from '@/components/ComparativeModal';
 import BiomarkerMasterTable from '@/components/BiomarkerMasterTable';
 import { normalizeBiomarkerName, studyBiomarkerElementId, chartBiomarkerElementId, tablaBiomarkerElementId } from '@/lib/biomarkers';
+import { supabase } from '@/lib/supabase';
+
+// ─── Session token helper (client-side) ───────────────────────────────────────
+// Used to attach Authorization headers to fetch() calls to protected API routes.
+async function getSessionToken(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
 
 
 // ─── Clean markdown renderer for chat messages ───────────────────────────────
@@ -295,7 +303,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const handleGenerateInterviewToken = async () => {
     setIsGeneratingToken(true);
     try {
-      const res = await fetch(`/api/pacientes/${id}/interview-token`, { method: 'POST' });
+      const token = await getSessionToken();
+      const res = await fetch(`/api/pacientes/${id}/interview-token`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await res.json();
       if (res.ok && data.token) {
         setInterviewToken(data.token);
@@ -312,7 +324,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
   const handleRevokeInterviewToken = async () => {
     if (!confirm('¿Eliminar el link de entrevista? El paciente ya no podrá acceder con el link anterior.')) return;
     try {
-      const res = await fetch(`/api/pacientes/${id}/interview-token`, { method: 'DELETE' });
+      const token = await getSessionToken();
+      const res = await fetch(`/api/pacientes/${id}/interview-token`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         setInterviewToken(null);
       } else {
@@ -443,9 +459,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
     setIsBuildingCanonical(true);
     setCanonicalMsg(null);
     try {
+      const token = await getSessionToken();
       const res = await fetch('/api/build-canonical', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ patientId: id }),
       });
       const data = await res.json();
@@ -517,9 +537,11 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
       // Auto-recover any orphaned documents (e.g. from previous merges that
       // didn't re-link PDFs before deleting source studies). This is a no-op
       // if there are no orphans, so it's safe to call on every load.
-      await fetch(`/api/pacientes/${id}/documents/recover`, { method: 'POST' });
+      const token = await getSessionToken();
+      const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      await fetch(`/api/pacientes/${id}/documents/recover`, { method: 'POST', headers: authHeader });
 
-      const res = await fetch(`/api/pacientes/${id}/documents`, { cache: 'no-store' });
+      const res = await fetch(`/api/pacientes/${id}/documents`, { cache: 'no-store', headers: authHeader });
       if (res.ok) {
         const data = await res.json();
         setDocuments(data);
@@ -531,6 +553,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
   const handleAttachDocument = async (studyId: string, file: File) => {
     try {
+      const token = await getSessionToken();
       const formData = new FormData();
       formData.append('file', file);
       formData.append('file_type', 'estudio_sangre');
@@ -539,6 +562,7 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
       const res = await fetch(`/api/pacientes/${id}/documents`, {
         method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData
       });
       if (res.ok) {
@@ -611,9 +635,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
         });
 
         update('analyzing');
+        const authToken = await getSessionToken();
         const res = await fetch('/api/analyze', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          },
           body: JSON.stringify({ base64, mimeType: file.type, patientName: patient?.full_name ?? '' })
         });
         const aiData = await res.json();
@@ -664,8 +692,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
           docFormData.append('study_id', study.id);
 
           try {
+            const uploadToken = await getSessionToken();
             const uploadRes = await fetch(`/api/pacientes/${id}/documents`, {
               method: 'POST',
+              headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
               body: docFormData
             });
             if (!uploadRes.ok) {
@@ -712,9 +742,13 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
 
     try {
       const interviewAnswers = await getInterviewAnswers(id);
+      const chatToken = await getSessionToken();
       const res = await fetch('/api/patient/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(chatToken ? { Authorization: `Bearer ${chatToken}` } : {}),
+        },
         body: JSON.stringify({ patient, studies, interviewAnswers, chatHistory, message: userMsg })
       });
       const data = await res.json();
@@ -1695,8 +1729,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                         formData.append('file_type', manualDocType);
                         formData.append('notes', manualDocNotes);
                         try {
+                          const uploadToken = await getSessionToken();
                           const res = await fetch(`/api/pacientes/${id}/documents`, {
                             method: 'POST',
+                            headers: uploadToken ? { Authorization: `Bearer ${uploadToken}` } : {},
                             body: formData
                           });
                           if (res.ok) {
@@ -1839,8 +1875,10 @@ export default function PatientProfile({ params }: { params: Promise<{ id: strin
                               onClick={async () => {
                                 if (!confirm('¿Eliminar este documento permanentemente?')) return;
                                 try {
+                                  const delToken = await getSessionToken();
                                   const res = await fetch(`/api/pacientes/${id}/documents?docId=${doc.id}`, {
-                                    method: 'DELETE'
+                                    method: 'DELETE',
+                                    headers: delToken ? { Authorization: `Bearer ${delToken}` } : {},
                                   });
                                   if (res.ok) {
                                     loadDocuments();

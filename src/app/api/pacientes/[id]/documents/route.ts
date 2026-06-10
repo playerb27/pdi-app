@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/auth-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +12,9 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getClient();
   try {
     const { id: patientId } = await params;
@@ -48,6 +52,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getClient();
   try {
     const { id: patientId } = await params;
@@ -129,6 +136,9 @@ export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getClient();
   try {
     const { id: patientId } = await params;
@@ -185,6 +195,9 @@ export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getClient();
   try {
     const { id: patientId } = await params;

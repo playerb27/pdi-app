@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { requireAuth } from '@/lib/auth-server';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? '');
 
@@ -18,6 +19,9 @@ interface SeriesInput {
 
 export async function POST(req: NextRequest) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { series }: { series: SeriesInput[] } = await req.json();
     if (!series?.length) {
       return NextResponse.json({ error: 'No series data provided' }, { status: 400 });

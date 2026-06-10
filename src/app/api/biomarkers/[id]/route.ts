@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/auth-server';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /api/biomarkers/[id]
@@ -14,6 +15,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { id: biomarkerId } = await params;
     if (!biomarkerId) {
       return NextResponse.json({ error: 'Falta biomarkerId' }, { status: 400 });
@@ -116,6 +120,9 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const authResult = await requireAuth(_req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { id: biomarkerId } = await params;
     if (!biomarkerId) {
       return NextResponse.json({ error: 'Falta biomarkerId' }, { status: 400 });

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { ALL_SECTIONS } from '@/lib/questionnaire-data-ext';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/auth-server';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -840,6 +841,9 @@ Sé específico y accionable. Cada recomendación debe tener un "por qué" claro
 
 export async function POST(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { moduleNum, patient, patientId, interviewAnswers, approvedModules } = await req.json();
 
     if (!process.env.GEMINI_API_KEY) {

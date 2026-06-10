@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/auth-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,9 @@ export async function POST(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(_req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getSupabase();
   const { id: patientId } = await params;
 
@@ -40,6 +44,9 @@ export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authResult = await requireAuth(_req);
+  if (authResult instanceof NextResponse) return authResult;
+
   const sb = getSupabase();
   const { id: patientId } = await params;
 

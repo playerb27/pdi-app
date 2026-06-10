@@ -1,6 +1,19 @@
 import { supabase } from './supabase';
 import { HIDDEN_QUESTION_IDS } from './questionnaire-data-ext';
 
+// ─── Auth header helper ───────────────────────────────────────────────────────
+// Returns { Authorization: 'Bearer <token>' } for authenticated API calls.
+// All internal fetch() calls to /api/* routes must include these headers so the
+// server-side requireAuth() guard can validate the session.
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) return { 'Content-Type': 'application/json' };
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${session.access_token}`,
+  };
+}
+
 export interface Patient {
   id: string;
   full_name: string;
@@ -195,9 +208,10 @@ export async function updateBiomarker(
   updates: { value?: string; flag?: string; reference_range?: string }
 ): Promise<boolean> {
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(updates),
     });
 
@@ -230,8 +244,10 @@ export async function updateBiomarkerRange(
 
 export async function deleteBiomarker(biomarkerId: string): Promise<boolean> {
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch(`/api/biomarkers/${biomarkerId}`, {
       method: 'DELETE',
+      headers: { Authorization: headers.Authorization },
     });
 
     if (!res.ok) {
@@ -442,8 +458,10 @@ export const clearComparativeMarkers = clearComparativeGroups;
 
 export async function getAiNotes(patientId: string): Promise<AiNote[]> {
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch(`/api/patient/ai-notes?patientId=${patientId}`, {
       cache: 'no-store',
+      headers: { Authorization: headers.Authorization },
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -460,9 +478,10 @@ export async function getAiNotes(patientId: string): Promise<AiNote[]> {
 
 export async function saveAiNote(patientId: string, question: string, answer: string): Promise<{ success: boolean; error?: string }> {
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch('/api/patient/ai-notes', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ patientId, question, answer }),
     });
     if (!res.ok) {
@@ -479,9 +498,10 @@ export async function saveAiNote(patientId: string, question: string, answer: st
 
 export async function deleteAiNote(patientId: string, noteId: string): Promise<void> {
   try {
+    const headers = await getAuthHeaders();
     const res = await fetch('/api/patient/ai-notes', {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ patientId, noteId }),
     });
     if (!res.ok) {

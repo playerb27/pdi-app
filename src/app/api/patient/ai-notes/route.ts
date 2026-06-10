@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireAuth } from '@/lib/auth-server';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /api/patient/ai-notes
@@ -46,6 +47,9 @@ async function readGroups(sb: any, patientId: string): Promise<{ groups: any[]; 
 // ── GET ──────────────────────────────────────────────────────────────────────
 export async function GET(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { searchParams } = new URL(req.url);
     const patientId = searchParams.get('patientId');
     if (!patientId) return NextResponse.json({ error: 'patientId requerido' }, { status: 400 });
@@ -66,6 +70,9 @@ export async function GET(req: Request) {
 // ── POST ─────────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const body = await req.json();
     const { patientId, question, answer } = body;
     if (!patientId || !answer) {
@@ -107,6 +114,9 @@ export async function POST(req: Request) {
 // ── DELETE ───────────────────────────────────────────────────────────────────
 export async function DELETE(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const body = await req.json();
     const { patientId, noteId } = body;
     if (!patientId || !noteId) {

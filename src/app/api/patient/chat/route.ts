@@ -1,10 +1,14 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-server';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { patient, studies, interviewAnswers, chatHistory, message } = await req.json();
 
     if (!patient) return NextResponse.json({ error: 'Datos del paciente requeridos' }, { status: 400 });

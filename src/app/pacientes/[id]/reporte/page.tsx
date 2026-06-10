@@ -20,6 +20,13 @@ import { generatePrintHTML, svgForSeries, buildSeriesForPrint } from '@/lib/gene
 import ExpandedChartModal, { type ChartSeries } from '@/components/ExpandedChartModal';
 import { FullWidthChart, FullWidthZoneChart } from '@/components/ComparativeModal';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
+import { supabase } from '@/lib/supabase';
+
+// ─── Session token helper (client-side) ───────────────────────────────────────
+async function getSessionToken(): Promise<string | null> {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token ?? null;
+}
 
 
 // ─── SVG → PNG conversion (browser-only) ─────────────────────────────────────
@@ -243,9 +250,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
 
   const autoBuildCanonical = async () => {
     try {
+      const token = await getSessionToken();
       await fetch('/api/build-canonical', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ patientId: id }),
       });
     } catch (err) {
@@ -295,9 +306,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
   const deleteAiNoteById = async (noteId: string) => {
     setDeletingNoteId(noteId);
     try {
+      const token = await getSessionToken();
       const res = await fetch('/api/patient/ai-notes', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ patientId: id, noteId }),
       });
       if (!res.ok) {
@@ -328,9 +343,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
     setGenerating(prev => ({ ...prev, [num]: true }));
     setExpanded(num);
     try {
+      const token = await getSessionToken();
       const res = await fetch('/api/report/generate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           moduleNum: num,
           patient,
@@ -763,9 +782,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                                   return { name: markerName, unit: '', referenceRange: undefined, points };
                                                 }).filter((s: any) => s.points.length > 0);
 
+                                                const cnToken = await getSessionToken();
                                                 const res = await fetch('/api/report/comparative-note', {
                                                   method: 'POST',
-                                                  headers: { 'Content-Type': 'application/json' },
+                                                  headers: {
+                                                    'Content-Type': 'application/json',
+                                                    ...(cnToken ? { Authorization: `Bearer ${cnToken}` } : {}),
+                                                  },
                                                   body: JSON.stringify({ series: groupSeries }),
                                                 });
                                                 const data = await res.json();
@@ -883,9 +906,13 @@ export default function ReportePage({ params }: { params: Promise<{ id: string }
                                       // Save the edited content back as a single consolidated note
                                       const content = editContent[7] ?? '';
                                       // Persist edited draft via API as a special note
+                                      const saveToken = await getSessionToken();
                                       const res = await fetch('/api/patient/ai-notes', {
                                         method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          ...(saveToken ? { Authorization: `Bearer ${saveToken}` } : {}),
+                                        },
                                         body: JSON.stringify({ patientId: id, question: '__m7_draft__', answer: content }),
                                       });
                                       if (!res.ok) {

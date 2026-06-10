@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { normalizeBiomarkerName } from '@/lib/biomarkers';
 import { getCatalogEntry } from '@/lib/biomarker-catalog';
+import { requireAuth } from '@/lib/auth-server';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/build-canonical
@@ -41,6 +42,9 @@ function isQualitativeValue(val: string): boolean {
 
 export async function POST(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { patientId } = await req.json();
 
     if (!patientId) {

@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth-server';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -364,6 +365,9 @@ function detectExtremeOutliers(biomarkers: Biomarker[]): ExtremeOutlier[] {
 // ─────────────────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
+    const authResult = await requireAuth(req);
+    if (authResult instanceof NextResponse) return authResult;
+
     const { base64, mimeType, patientName } = await req.json();
 
     if (!process.env.GEMINI_API_KEY) {
