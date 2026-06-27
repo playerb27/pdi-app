@@ -106,7 +106,7 @@ export default function EntrevistaPage({ params }: { params: Promise<{ id: strin
   const loadDocuments = useCallback(() => {
     fetch(`/api/pacientes/${id}/documents`, { cache: 'no-store' })
       .then(res => res.json())
-      .then(setDocuments)
+      .then(data => { if (Array.isArray(data)) setDocuments(data); })
       .catch(err => console.error("Error loading documents in interview:", err));
   }, [id]);
 
@@ -1365,7 +1365,7 @@ export default function EntrevistaPage({ params }: { params: Promise<{ id: strin
   const renderRetinografia = (q: any, val: string) => {
     const isSi = val.startsWith('Sí');
     const findingsVal = answers['s9q7'] ?? '';
-    const retinografiaDocs = documents.filter(d => d.file_type === 'retinografia');
+    const retinografiaDocs = Array.isArray(documents) ? documents.filter(d => d.file_type === 'retinografia') : [];
 
     const handleUploadRetinografia = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = e.target.files;
